@@ -1,99 +1,112 @@
-# 🚀 ProcureAI - Intelligent Procurement Platform
+# 🤖 ProcureAI — Intelligent Procurement SaaS
 
-![ProcureAI Banner](client/public/og-image.png)
+> **Automate your entire procurement lifecycle.** From demand forecasting to purchase order generation, ProcureAI keeps you in control while AI handles the complexity.
 
-**ProcureAI** is a next-generation SaaS platform designed to transform enterprise procurement. By leveraging artificial intelligence, it automates the entire lifecycle from requisition to payment, providing real-time spend analysis, supplier scoring, and intelligent workflow automation.
+![ProcureAI Dashboard](https://via.placeholder.com/1200x600?text=ProcureAI+Dashboard+Preview) 
+*(Replace with actual screenshot)*
 
-## ✨ Key Features
+## 📌 Overview
 
-- **🤖 AI-Powered Spend Analysis**: Automatically categorize transactions and identify cost-saving opportunities.
-- **⚡ Smart Workflows**: customizable approval chains that adapt based on spend thresholds and urgency.
-- **🌍 Global Supplier Management**: unified portal for vetting, onboarding, and rating suppliers worldwide.
-- **📊 Real-Time Analytics**: comprehensive dashboards for tracking KPI's, including spend velocity and savings realization.
-- **🛡️ Enterprise-Grade Security**: Role-based access control (RBAC) and compliance-ready data handling.
-- **🎨 Premium UX**: A stunning, responsive interface built with modern design principles (Glassmorphism, Dark Mode, Animations).
+**ProcureAI** is an AI-powered SaaS platform designed to modernize procurement for SMBs and enterprises. It replaces manual spreadsheets and slow approval emails with an intelligent, automated workflow.
+
+### Key Problems We Solve:
+*   **Stockouts & Overstocks:** AI predicts demand based on sales velocity.
+*   **Manual Supplier Comparison:** Automatically tracks and compares supplier price sheets.
+*   **Slow PO Creation:** Generates smart PO drafts with one click.
+*   **Lack of Visibility:** Real-time analytics on spend, savings, and supplier performance.
+
+---
+
+## 🚀 Key Features
+
+*   **📈 AI Demand Forecasting:** Predict reorder needs from historical data (30/60/90 days).
+*   **🤖 Smart PO Generation:** Auto-drafts Purchase Orders with optimal quantities.
+*   **✅ Multi-Level Approvals:** Configurable workflows (Manager → Finance → Head).
+*   **🔍 Supplier Scoring:** Rate suppliers based on price, delivery time, and quality.
+*   **📊 Real-Time Analytics:** Visualize spend by category, supplier, and period.
+*   **🔔 Smart Alerts:** Low stock notifications and price anomaly detection.
+
+---
 
 ## 🛠️ Tech Stack
 
-- **Frontend**: [Next.js 15+](https://nextjs.org/) (App Router), [React](https://react.dev/), [TypeScript](https://www.typescriptlang.org/)
-- **Styling**: [Tailwind CSS](https://tailwindcss.com/)
-- **UI Components**: [Shadcn/UI](https://ui.shadcn.com/)
-- **Animations**: [Framer Motion](https://www.framer.com/motion/)
-- **Theme Management**: [Next-Themes](https://github.com/pacocoursey/next-themes)
-- **State Management**: React Context / Hooks
-- **Icons**: [Lucide React](https://lucide.dev/)
+Built with a modern, high-performance, and open-source stack.
 
-## 🚀 Getting Started
+### Frontend
+*   **Framework:** [Next.js 16](https://nextjs.org/) (App Router)
+*   **Styling:** [Tailwind CSS](https://tailwindcss.com/)
+*   **UI Library:** [Shadcn/UI](https://ui.shadcn.com/)
+*   **State Management:** React Hooks / Context
+*   **Animations:** Framer Motion
 
-Follow these steps to set up the project locally.
+### Backend (Planned)
+*   **Runtime:** Python 3.11+ / Node.js
+*   **Framework:** FastAPI / Express
+*   **Database:** PostgreSQL (Neon)
+*   **Auth:** Clerk
+*   **AI/ML:** Prophet (Forecasting), Scikit-learn (Anomalies)
+
+---
+
+## 🏁 Getting Started
 
 ### Prerequisites
-
-- Node.js (v18 or higher)
-- npm or yarn or pnpm
+*   Node.js 18+ installed
+*   npm or yarn or pnpm
 
 ### Installation
 
-1.  **Clone the repository:**
-
+1.  **Clone the repository**
     ```bash
     git clone https://github.com/yourusername/procure-ai.git
     cd procure-ai
     ```
 
-2.  **Install dependencies (Client):**
-
+2.  **Install Frontend Dependencies**
     ```bash
     cd client
     npm install
     ```
 
-3.  **Run the development server:**
-
+3.  **Run Development Server**
     ```bash
     npm run dev
     ```
 
-4.  **Open the application:**
-    Visit `http://localhost:3000` in your browser.
+4.  Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+---
 
 ## 📂 Project Structure
 
-```
+```bash
 procure-ai/
-├── client/                 # Next.js Frontend Application
-│   ├── public/             # Static assets
+├── client/                 # Next.js Frontend
 │   ├── src/
-│   │   ├── app/            # Next.js App Router pages & layouts
-│   │   ├── components/     # Reusable UI components
-│   │   │   ├── landing/    # Landing page specific components
-│   │   │   ├── ui/         # Shadcn/UI primitives
-│   │   │   └── ...
-│   │   ├── lib/            # Utility functions
-│   │   └── ...
-│   ├── .gitignore
-│   ├── next.config.mjs
-│   ├── tailwind.config.ts
-│   └── tsconfig.json
-├── .gitignore              # Root gitignore
-└── README.md               # Project documentation
+│   │   ├── app/            # App Router (Pages)
+│   │   ├── components/     # UI Components
+│   │   └── lib/            # Utilities
+│   └── public/             # Static Assets
+├── server/                 # Backend API (Coming Soon)
+└── README.md               # Documentation
 ```
 
-## 🎨 Theme Customization
+---
 
-The application features a robust theming engine supporting multiple palettes:
-- **Midnight** (Default Deep Blue)
-- **Ocean** (Cyan Accents)
-- **Royal** (Magenta Accents)
-- **Forest** (Emerald Accents)
-- **Sunset** (Orange Accents)
+## 🛣️ Roadmap
 
-You can switch themes using the floating settings gear in the bottom right corner.
+- [x] **Phase 1:** Project Skeleton & UI Shell (Done)
+- [x] **Phase 1.9:** Landing Page Polish & Motion (Done)
+- [ ] **Phase 2:** Authentication & User Roles (Coming Next)
+- [ ] **Phase 3:** Core Procurement Workflows (PO Creation)
+- [ ] **Phase 4:** AI Integration (Forecasting Models)
 
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+---
 
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+Made with ❤️ by the ProcureAI Team.
