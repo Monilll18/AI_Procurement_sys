@@ -1,121 +1,157 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Check, X, Clock, AlertCircle } from "lucide-react";
+import { Check, X, Clock, AlertCircle, Loader2 } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-
-// Dummy Data
-const pendingApprovals = [
-    {
-        id: "PR-2026-080",
-        requester: "Amit Patel",
-        role: "Kitchen Head",
-        dept: "Kitchen",
-        items: [
-            { name: "Premium Tomatoes", qty: "200 kg", price: "₹9,000" },
-            { name: "Onions", qty: "100 kg", price: "₹3,400" }
-        ],
-        total: "₹12,400",
-        date: "2 hours ago",
-        urgency: "High",
-        steps: [
-            { role: "Manager", status: "You", date: "Now" },
-            { role: "Finance", status: "Waiting", date: "" },
-            { role: "Director", status: "Waiting", date: "" }
-        ]
-    },
-    {
-        id: "PR-2026-085",
-        requester: "Sarah Lee",
-        role: "Admin",
-        dept: "Office",
-        items: [
-            { name: "Printer Paper (A4)", qty: "50 rims", price: "₹12,500" },
-        ],
-        total: "₹12,500",
-        date: "5 hours ago",
-        urgency: "Medium",
-        steps: [
-            { role: "Manager", status: "You", date: "Now" },
-            { role: "Finance", status: "Waiting", date: "" }
-        ]
-    }
-];
+import { getPurchaseOrders, PurchaseOrder, approvePO, rejectPO } from "@/lib/api";
+import { useAuth } from "@clerk/nextjs";
 
 export default function ApprovalsPage() {
+    const [pendingOrders, setPendingOrders] = useState<PurchaseOrder[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [actionLoading, setActionLoading] = useState<string | null>(null);
+    const { getToken } = useAuth();
+
+    const loadPending = () => {
+        setLoading(true);
+        getPurchaseOrders("pending_approval")
+            .then(setPendingOrders)
+            .catch(console.error)
+            .finally(() => setLoading(false));
+    };
+
+    useEffect(() => { loadPending(); }, []);
+
+    const handleApprove = async (poId: string) => {
+        try {
+            setActionLoading(poId);
+            const token = await getToken();
+            await approvePO(poId, token || "");
+            setPendingOrders((prev) => prev.filter((po) => po.id !== poId));
+        } catch (error) {
+            console.error("Failed to approve:", error);
+        } finally {
+            setActionLoading(null);
+        }
+    };
+
+    const handleReject = async (poId: string) => {
+        try {
+            setActionLoading(poId);
+            const token = await getToken();
+            await rejectPO(poId, token || "");
+            setPendingOrders((prev) => prev.filter((po) => po.id !== poId));
+        } catch (error) {
+            console.error("Failed to reject:", error);
+        } finally {
+            setActionLoading(null);
+        }
+    };
+
+    if (loading) {
+        return (
+            <div className="flex items-center justify-center min-h-[60vh]">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-6">
             <div>
                 <h2 className="text-3xl font-bold tracking-tight">Approvals</h2>
-                <p className="text-muted-foreground">Review and take action on purchase requests.</p>
+                <p className="text-muted-foreground">Review and take action on purchase orders pending approval.</p>
             </div>
 
-            <div className="grid gap-6 lg:grid-cols-2">
-                {pendingApprovals.map((approval) => (
-                    <Card key={approval.id} className="border-l-4 border-l-purple-500 shadow-sm hover:shadow-md transition-shadow">
-                        <CardHeader className="pb-3">
-                            <div className="flex justify-between items-start">
-                                <div className="flex gap-3">
-                                    <Avatar>
-                                        <AvatarFallback className="bg-purple-100 text-purple-700">{approval.requester.substring(0, 2)}</AvatarFallback>
-                                    </Avatar>
-                                    <div>
-                                        <CardTitle className="text-base">{approval.requester}</CardTitle>
-                                        <CardDescription>{approval.role} • {approval.dept}</CardDescription>
-                                    </div>
-                                </div>
-                                <Badge variant={approval.urgency === 'High' ? 'destructive' : 'secondary'}>
-                                    {approval.urgency === 'High' && <AlertCircle className="w-3 h-3 mr-1" />}
-                                    {approval.urgency} Priority
-                                </Badge>
-                            </div>
-                        </CardHeader>
-                        <CardContent className="pb-3">
-                            <div className="bg-muted/30 rounded-lg p-3 space-y-2 mb-4">
-                                <div className="flex justify-between text-sm font-medium text-muted-foreground mb-2">
-                                    <span>Request #{approval.id}</span>
-                                    <span>{approval.date}</span>
-                                </div>
-                                {approval.items.map((item, i) => (
-                                    <div key={i} className="flex justify-between text-sm">
-                                        <span>{item.qty} x {item.name}</span>
-                                        <span>{item.price}</span>
-                                    </div>
-                                ))}
-                                <div className="border-t pt-2 flex justify-between font-bold text-base mt-2">
-                                    <span>Total</span>
-                                    <span>{approval.total}</span>
-                                </div>
-                            </div>
-
-                            {/* Progress Stepper */}
-                            <div className="relative flex items-center justify-between text-xs text-muted-foreground mt-4 px-2">
-                                {/* Line */}
-                                <div className="absolute left-0 top-2.5 h-0.5 w-[90%] bg-gray-100 -z-10 mx-4"></div>
-
-                                {approval.steps.map((step, i) => (
-                                    <div key={i} className="flex flex-col items-center gap-1 bg-white px-1">
-                                        <div className={`w-5 h-5 rounded-full flex items-center justify-center border-2 ${step.status === 'You' ? 'border-purple-600 bg-purple-50 text-purple-600' : 'border-gray-200 bg-white'}`}>
-                                            {step.status === 'You' ? <div className="w-2 h-2 bg-purple-600 rounded-full" /> : i === 0 ? <Check className="w-3 h-3" /> : ''}
+            {pendingOrders.length === 0 ? (
+                <Card className="p-8 text-center">
+                    <div className="flex flex-col items-center gap-3">
+                        <Check className="h-12 w-12 text-green-500" />
+                        <h3 className="text-xl font-semibold">All caught up!</h3>
+                        <p className="text-muted-foreground">No purchase orders pending approval.</p>
+                    </div>
+                </Card>
+            ) : (
+                <div className="grid gap-6 lg:grid-cols-2">
+                    {pendingOrders.map((po) => (
+                        <Card key={po.id} className="border-l-4 border-l-purple-500 shadow-sm hover:shadow-md transition-shadow">
+                            <CardHeader className="pb-3">
+                                <div className="flex justify-between items-start">
+                                    <div className="flex gap-3">
+                                        <Avatar>
+                                            <AvatarFallback className="bg-purple-100 text-purple-700">
+                                                {po.po_number.substring(0, 2)}
+                                            </AvatarFallback>
+                                        </Avatar>
+                                        <div>
+                                            <CardTitle className="text-base">{po.po_number}</CardTitle>
+                                            <CardDescription>
+                                                {po.supplier_name || "Unknown Supplier"} • {po.line_items?.length || 0} items
+                                            </CardDescription>
                                         </div>
-                                        <span className={step.status === 'You' ? 'font-medium text-foreground' : ''}>{step.role}</span>
                                     </div>
-                                ))}
-                            </div>
-                        </CardContent>
-                        <CardFooter className="flex gap-3 border-t bg-gray-50/50 p-4">
-                            <Button variant="outline" className="flex-1 hover:bg-red-50 hover:text-red-600 hover:border-red-200">
-                                <X className="w-4 h-4 mr-2" /> Reject
-                            </Button>
-                            <Button className="flex-1 bg-purple-600 hover:bg-purple-700">
-                                <Check className="w-4 h-4 mr-2" /> Approve
-                            </Button>
-                        </CardFooter>
-                    </Card>
-                ))}
-            </div>
+                                    <Badge variant="secondary" className="bg-yellow-100 text-yellow-700">
+                                        <Clock className="w-3 h-3 mr-1" /> Pending
+                                    </Badge>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="pb-3">
+                                <div className="bg-muted/30 rounded-lg p-3 space-y-2">
+                                    <div className="flex justify-between text-sm text-muted-foreground">
+                                        <span>Created: {new Date(po.created_at).toLocaleDateString()}</span>
+                                        {po.expected_delivery && (
+                                            <span>Due: {new Date(po.expected_delivery).toLocaleDateString()}</span>
+                                        )}
+                                    </div>
+                                    {po.line_items?.slice(0, 3).map((item, i) => (
+                                        <div key={i} className="flex justify-between text-sm">
+                                            <span>{item.quantity} × item</span>
+                                            <span>${item.total_price.toLocaleString()}</span>
+                                        </div>
+                                    ))}
+                                    {(po.line_items?.length || 0) > 3 && (
+                                        <p className="text-xs text-muted-foreground">
+                                            +{(po.line_items?.length || 0) - 3} more items...
+                                        </p>
+                                    )}
+                                    <div className="border-t pt-2 flex justify-between font-bold text-base mt-2">
+                                        <span>Total</span>
+                                        <span>${po.total_amount.toLocaleString()}</span>
+                                    </div>
+                                </div>
+                                {po.notes && (
+                                    <p className="text-xs text-muted-foreground mt-2 italic">Note: {po.notes}</p>
+                                )}
+                            </CardContent>
+                            <CardFooter className="flex gap-3 border-t bg-gray-50/50 p-4">
+                                <Button
+                                    variant="outline"
+                                    className="flex-1 hover:bg-red-50 hover:text-red-600 hover:border-red-200"
+                                    onClick={() => handleReject(po.id)}
+                                    disabled={actionLoading === po.id}
+                                >
+                                    <X className="w-4 h-4 mr-2" /> Reject
+                                </Button>
+                                <Button
+                                    className="flex-1 bg-purple-600 hover:bg-purple-700"
+                                    onClick={() => handleApprove(po.id)}
+                                    disabled={actionLoading === po.id}
+                                >
+                                    {actionLoading === po.id ? (
+                                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                    ) : (
+                                        <Check className="w-4 h-4 mr-2" />
+                                    )}
+                                    Approve
+                                </Button>
+                            </CardFooter>
+                        </Card>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

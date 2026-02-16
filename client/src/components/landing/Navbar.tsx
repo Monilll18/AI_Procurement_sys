@@ -6,6 +6,7 @@ import { ModeToggle } from "@/components/ThemeToggle";
 import { Menu, X } from "lucide-react";
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { SignInButton, SignUpButton, SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
 
 export function Navbar() {
     const [isOpen, setIsOpen] = useState(false);
@@ -32,8 +33,24 @@ export function Navbar() {
                 {/* Actions */}
                 <div className="hidden md:flex items-center gap-4">
                     <ModeToggle />
-                    <Button variant="ghost" className="text-muted-foreground hover:text-foreground">Log in</Button>
-                    <Button className="font-semibold shadow-lg shadow-primary/25">Get Started</Button>
+
+                    {/* Show auth buttons when signed out */}
+                    <SignedOut>
+                        <SignInButton mode="modal">
+                            <Button variant="ghost" className="text-muted-foreground hover:text-foreground">Log in</Button>
+                        </SignInButton>
+                        <SignUpButton mode="modal">
+                            <Button className="font-semibold shadow-lg shadow-primary/25">Get Started</Button>
+                        </SignUpButton>
+                    </SignedOut>
+
+                    {/* Show user button + dashboard link when signed in */}
+                    <SignedIn>
+                        <Link href="/dashboard">
+                            <Button variant="ghost" className="text-muted-foreground hover:text-foreground">Dashboard</Button>
+                        </Link>
+                        <UserButton afterSignOutUrl="/" />
+                    </SignedIn>
                 </div>
 
                 {/* Mobile Toggle */}
@@ -56,8 +73,21 @@ export function Navbar() {
                             <Link href="#pricing" onClick={() => setIsOpen(false)} className="text-lg font-medium text-foreground">Pricing</Link>
                             <Link href="#faq" onClick={() => setIsOpen(false)} className="text-lg font-medium text-foreground">FAQ</Link>
                             <div className="h-px bg-border my-2" />
-                            <Button variant="outline" className="w-full justify-start">Log in</Button>
-                            <Button className="w-full">Get Started</Button>
+
+                            <SignedOut>
+                                <SignInButton mode="modal">
+                                    <Button variant="outline" className="w-full justify-start">Log in</Button>
+                                </SignInButton>
+                                <SignUpButton mode="modal">
+                                    <Button className="w-full">Get Started</Button>
+                                </SignUpButton>
+                            </SignedOut>
+
+                            <SignedIn>
+                                <Link href="/dashboard" onClick={() => setIsOpen(false)}>
+                                    <Button variant="outline" className="w-full">Dashboard</Button>
+                                </Link>
+                            </SignedIn>
                         </div>
                     </motion.div>
                 )}
