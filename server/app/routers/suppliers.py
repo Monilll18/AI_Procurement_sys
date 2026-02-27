@@ -101,7 +101,7 @@ async def get_supplier(supplier_id: UUID, db: Session = Depends(get_db)):
     return supplier
 
 
-@router.post("/", response_model=SupplierResponse, status_code=201)
+@router.post("/", status_code=201)
 async def create_supplier(
     supplier_data: SupplierCreate,
     db: Session = Depends(get_db),
@@ -113,25 +113,31 @@ async def create_supplier(
     db.add(supplier)
     db.flush()  # Get the ID
 
-    invite_sent = False
+    portal_credentials = None
     if supplier_data.send_portal_invite and supplier.email:
-        invite_sent = _create_portal_invite(db, supplier, user_id)
+        portal_credentials = _create_portal_invite(db, supplier, user_id)
 
     db.commit()
     db.refresh(supplier)
 
-    return supplier
+    # Build response with credentials (if portal invite was sent)
+    response = SupplierResponse.model_validate(supplier).model_dump()
+    response["id"] = str(response["id"])
+    if portal_credentials:
+        response["portal_credentials"] = portal_credentials
+    return response
 
 
-def _create_portal_invite(db: Session, supplier: Supplier, invited_by: str) -> bool:
-    """Create a SupplierUser + Invitation for a supplier."""
+def _create_portal_invite(db: Session, supplier: Supplier, invited_by: str) -> dict | None:
+    """Create a SupplierUser + Invitation for a supplier. Returns credentials dict."""
     # Check if user already exists
     existing = db.query(SupplierUser).filter(SupplierUser.email == supplier.email.lower().strip()).first()
     if existing:
-        return False  # Already has an account
+        return None  # Already has an account
 
     temp_password = _generate_temp_password()
     invite_token = secrets.token_urlsafe(32)
+    portal_url = "http://localhost:3000/supplier-portal/login"
 
     # Create supplier user with temp password
     user = SupplierUser(
@@ -158,15 +164,28 @@ def _create_portal_invite(db: Session, supplier: Supplier, invited_by: str) -> b
 
     db.flush()
 
-    # Send email
-    _send_supplier_invite_email(
+    # Always log credentials to console for local dev
+    print(f"\n{'='*60}")
+    print(f"🔑 SUPPLIER PORTAL CREDENTIALS for {supplier.name}")
+    print(f"   Email:         {supplier.email.lower().strip()}")
+    print(f"   Temp Password: {temp_password}")
+    print(f"   Portal URL:    {portal_url}")
+    print(f"{'='*60}\n")
+
+    # Send email (best-effort — credentials also shown in UI)
+    email_sent = _send_supplier_invite_email(
         supplier_name=supplier.name,
         email=supplier.email,
         temp_password=temp_password,
         invite_token=invite_token,
     )
 
-    return True
+    return {
+        "email": supplier.email.lower().strip(),
+        "temp_password": temp_password,
+        "portal_url": portal_url,
+        "email_sent": email_sent,
+    }
 
 
 @router.post("/{supplier_id}/invite")
@@ -199,12 +218,15 @@ async def send_portal_invite(
 
     db.flush()
 
-    success = _create_portal_invite(db, supplier, user_id)
-    if not success:
+    credentials = _create_portal_invite(db, supplier, user_id)
+    if not credentials:
         raise HTTPException(status_code=500, detail="Failed to create portal invite")
 
     db.commit()
-    return {"message": f"Portal invitation sent to {supplier.email}"}
+    return {
+        "message": f"Portal invitation sent to {supplier.email}",
+        "portal_credentials": credentials,
+    }
 
 
 @router.patch("/{supplier_id}", response_model=SupplierResponse)
@@ -234,25 +256,33 @@ async def delete_supplier(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user),
 ):
-    """Delete a supplier (requires auth)."""
+    """Delete a supplier and clean up related records (requires auth)."""
     supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
 
-    # Delete related records to prevent IntegrityError
+    # Clean up related records to avoid FK constraint errors
     from app.models.supplier_user import SupplierUser, SupplierInvitation
     from app.models.supplier_price_update import SupplierPriceUpdate
-    from app.models.supplier_invoice import SupplierInvoice
-    
+    from app.models.supplier_invoice import SupplierInvoice, InvoiceLineItem
+
+    # Delete invoices (and their line items via cascade)
+    invoices = db.query(SupplierInvoice).filter(SupplierInvoice.supplier_id == supplier_id).all()
+    for inv in invoices:
+        db.query(InvoiceLineItem).filter(InvoiceLineItem.invoice_id == inv.id).delete()
+        db.delete(inv)
+
+    # Delete price updates, users, invitations
+    db.query(SupplierPriceUpdate).filter(SupplierPriceUpdate.supplier_id == supplier_id).delete()
     db.query(SupplierInvitation).filter(SupplierInvitation.supplier_id == supplier_id).delete()
     db.query(SupplierUser).filter(SupplierUser.supplier_id == supplier_id).delete()
-    db.query(SupplierPriceUpdate).filter(SupplierPriceUpdate.supplier_id == supplier_id).delete()
-    db.query(SupplierInvoice).filter(SupplierInvoice.supplier_id == supplier_id).delete()
+
+    # Nullify supplier_id on POs (don't delete POs — they're important records)
+    from app.models.purchase_order import PurchaseOrder
+    db.query(PurchaseOrder).filter(PurchaseOrder.supplier_id == supplier_id).update(
+        {PurchaseOrder.supplier_id: None}, synchronize_session="fetch"
+    )
 
     db.delete(supplier)
-    try:
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=f"Cannot delete supplier with existing purchase orders or other dependencies. {str(e)}")
+    db.commit()
 

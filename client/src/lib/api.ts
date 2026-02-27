@@ -118,6 +118,7 @@ export interface SupplierCatalogItem {
     unit_price: number;
     currency: string;
     min_order_qty: number | null;
+    available_quantity: number | null;
     lead_time_days: number | null;
 }
 
@@ -139,11 +140,21 @@ export const getSuppliers = (status?: string) => {
     return apiFetch<Supplier[]>(`/api/suppliers/${params}`);
 };
 
-export const createSupplier = (data: Partial<Supplier>, token: string) =>
-    apiFetch<Supplier>("/api/suppliers/", { method: "POST", body: JSON.stringify(data) }, token);
+export interface PortalCredentials {
+    email: string;
+    temp_password: string;
+    portal_url: string;
+    email_sent: boolean;
+}
+
+export const createSupplier = (data: Partial<Supplier> & { send_portal_invite?: boolean }, token: string) =>
+    apiFetch<Supplier & { portal_credentials?: PortalCredentials }>("/api/suppliers/", { method: "POST", body: JSON.stringify(data) }, token);
 
 export const deleteSupplier = (id: string, token: string) =>
     apiFetch<null>(`/api/suppliers/${id}`, { method: "DELETE" }, token);
+
+export const resendSupplierInvite = (supplierId: string, token: string) =>
+    apiFetch<{ message: string; portal_credentials: PortalCredentials }>(`/api/suppliers/${supplierId}/invite`, { method: "POST" }, token);
 
 // Inventory
 export const getInventory = () => apiFetch<InventoryItem[]>("/api/inventory/");
@@ -352,6 +363,44 @@ export interface SupplierPriceComparison {
 
 export const getSupplierPriceComparison = (productId: string) =>
     apiFetch<SupplierPriceComparison[]>(`/api/supplier-prices/compare/${productId}`);
+
+// ─── Supplier Price Updates (Buyer Review) ──────────────────────────
+
+export interface PriceUpdateItem {
+    id: string;
+    supplier_id: string;
+    supplier_name: string;
+    product_id: string;
+    product_name: string;
+    current_price: number;
+    proposed_price: number;
+    change_percent: number;
+    reason: string | null;
+    effective_date: string;
+    status: "pending" | "approved" | "rejected";
+    review_notes: string | null;
+    reviewed_at: string | null;
+    created_at: string | null;
+}
+
+export const getPriceUpdates = (status?: string, token?: string) => {
+    const params = status ? `?status=${status}` : "";
+    return apiFetch<PriceUpdateItem[]>(`/api/supplier-prices/price-updates${params}`, {}, token);
+};
+
+export const approvePriceUpdate = (updateId: string, reviewNotes?: string, token?: string) =>
+    apiFetch<{ message: string }>(
+        `/api/supplier-prices/price-updates/${updateId}/approve${reviewNotes ? `?review_notes=${encodeURIComponent(reviewNotes)}` : ""}`,
+        { method: "POST" },
+        token,
+    );
+
+export const rejectPriceUpdate = (updateId: string, reviewNotes?: string, token?: string) =>
+    apiFetch<{ message: string }>(
+        `/api/supplier-prices/price-updates/${updateId}/reject${reviewNotes ? `?review_notes=${encodeURIComponent(reviewNotes)}` : ""}`,
+        { method: "POST" },
+        token,
+    );
 
 // ─── Users / Team Management ─────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import {
     supplierActivate, setSupplierToken, setStoredSupplierUser,
 } from "@/lib/supplier-api";
 
-function SupplierActivateContent() {
+export default function SupplierActivatePage() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const token = searchParams.get("token") || "";
@@ -174,13 +174,5 @@ function SupplierActivateContent() {
                 </Card>
             </div>
         </div>
-    );
-}
-
-export default function SupplierActivatePage() {
-    return (
-        <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-black"><Loader2 className="h-8 w-8 animate-spin text-violet-500" /></div>}>
-            <SupplierActivateContent />
-        </Suspense>
     );
 }

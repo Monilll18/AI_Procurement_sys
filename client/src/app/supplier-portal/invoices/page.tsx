@@ -17,10 +17,11 @@ import {
 } from "@/components/ui/table";
 import {
     FileText, Loader2, RefreshCw, Plus, Send, Eye, CheckCircle,
-    XCircle, AlertTriangle, ArrowRight, DollarSign, Clock,
+    XCircle, AlertTriangle, ArrowRight, DollarSign, Clock, Download,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
-    getInvoices, createInvoice, submitInvoice, getSupplierPOs,
+    getInvoices, createInvoice, submitInvoice, downloadInvoicePdf, getSupplierPOs,
     type SupplierInvoiceT, type SupplierPO,
 } from "@/lib/supplier-api";
 
@@ -117,10 +118,10 @@ export default function InvoicesPage() {
 
             // Show match result
             if (result.match_status === "mismatch") {
-                alert(`⚠️ Invoice created: ${result.invoice_number}\n\n3-Way Match Issues:\n${result.match_notes}`);
+                toast.warning(`Invoice created: ${result.invoice_number}\n3-Way Match Issues: ${result.match_notes}`);
             }
         } catch (err: any) {
-            alert(`❌ ${err.message}`);
+            toast.error(err.message || "Failed to create invoice");
         } finally {
             setCreating(false);
         }
@@ -129,9 +130,10 @@ export default function InvoicesPage() {
     const handleSubmit = async (inv: SupplierInvoiceT) => {
         try {
             await submitInvoice(inv.id);
+            toast.success(`Invoice ${inv.invoice_number} submitted for review`);
             loadInvoices();
         } catch (err: any) {
-            alert(`❌ ${err.message}`);
+            toast.error(err.message || "Failed to submit invoice");
         }
     };
 
@@ -228,6 +230,20 @@ export default function InvoicesPage() {
                                     <div className="flex flex-col gap-1.5 shrink-0">
                                         <Button size="sm" variant="outline" onClick={() => setViewInvoice(inv)}>
                                             <Eye className="h-3.5 w-3.5 mr-1" /> View
+                                        </Button>
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={async () => {
+                                                try {
+                                                    await downloadInvoicePdf(inv.id, `${inv.invoice_number}.pdf`);
+                                                    toast.success("Invoice PDF downloaded");
+                                                } catch (err: any) {
+                                                    toast.error(err.message || "Failed to download PDF");
+                                                }
+                                            }}
+                                        >
+                                            <Download className="h-3.5 w-3.5 mr-1" /> PDF
                                         </Button>
                                         {inv.status === "draft" && (
                                             <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => handleSubmit(inv)}>

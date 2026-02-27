@@ -24,7 +24,7 @@ class PurchaseOrder(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     po_number = Column(String(50), unique=True, nullable=False, index=True)
-    supplier_id = Column(UUID(as_uuid=True), ForeignKey("suppliers.id"), nullable=False)
+    supplier_id = Column(UUID(as_uuid=True), ForeignKey("suppliers.id"), nullable=True)
     created_by = Column(String(255), nullable=False)  # Clerk user ID
     status = Column(Enum(POStatus), nullable=False, default=POStatus.draft)
     total_amount = Column(Float, nullable=False, default=0.0)

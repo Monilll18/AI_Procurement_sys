@@ -16,7 +16,9 @@ import {
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Search, Loader2, Plus, Eye, X, Sparkles, Mail, FileText, CheckCircle, AlertTriangle, Copy, ChevronDown, Clock, Download, PackageCheck } from "lucide-react";
+import { Search, Loader2, Plus, Eye, X, Sparkles, Mail, FileText, CheckCircle, AlertTriangle, Copy, ChevronDown, Clock, Download, PackageCheck, Send, RefreshCw, Upload } from "lucide-react";
+import { toast } from "sonner";
+import { extractTextFromPDF } from "@/lib/pdf-extract";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
     getPurchaseOrders, createPurchaseOrder, submitPO, getSuppliers, getProducts,
@@ -25,7 +27,6 @@ import {
     type PurchaseOrder, type Supplier, type Product, type PODraft, type InvoiceMatch,
     type SupplierCatalogItem,
 } from "@/lib/api";
-import { Send } from "lucide-react";
 import { useAuth } from "@clerk/nextjs";
 import { useAICall } from "@/hooks/useAICall";
 import { AIErrorBoundary } from "@/components/AIErrorBoundary";
@@ -58,6 +59,7 @@ export default function PurchaseOrdersPage() {
     const [invoiceText, setInvoiceText] = useState("");
     const [invoiceMatch, setInvoiceMatch] = useState<InvoiceMatch | null>(null);
     const [invoiceMatchError, setInvoiceMatchError] = useState("");
+    const [extractingPdf, setExtractingPdf] = useState(false);
 
     // Receive Goods state
     const [receiveItems, setReceiveItems] = useState<{ line_item_id: string; quantity_received: number; condition: string }[]>([]);
@@ -210,7 +212,7 @@ export default function PurchaseOrdersPage() {
             setCreateOpen(false);
             loadOrders();
         } catch (err: any) {
-            alert(err.message || "Failed to create PO");
+            toast.error(err.message || "Failed to create PO");
         } finally {
             setSaving(false);
         }
@@ -224,7 +226,7 @@ export default function PurchaseOrdersPage() {
             setViewOrder(null);
             loadOrders();
         } catch (err: any) {
-            alert(err.message || "Failed to submit PO for approval");
+            toast.error(err.message || "Failed to submit PO for approval");
         } finally {
             setSubmitting(false);
         }
@@ -241,11 +243,11 @@ export default function PurchaseOrdersPage() {
                 items: itemsToReceive,
                 notes: receiveNotes || undefined,
             }, token);
-            alert(`✅ ${result.message}\nStatus: ${result.po_status}\nTotal received: ${result.total_received}/${result.total_ordered}`);
+            toast.success(`${result.message} — Received ${result.total_received}/${result.total_ordered}`);
             loadOrders();
             setViewOrder(null);
         } catch (err: any) {
-            alert(`❌ ${err.message || "Failed to record receipt"}`);
+            toast.error(err.message || "Failed to record receipt");
         } finally {
             setReceiving(false);
         }
@@ -332,51 +334,70 @@ export default function PurchaseOrdersPage() {
                                     <Plus className="mr-1 h-3 w-3" /> Add Item
                                 </Button>
                             </div>
-                            {lineItems.map((li, i) => (
-                                <div key={i} className="flex items-end gap-2 p-3 rounded-lg border bg-muted/30">
-                                    <div className="flex-1 grid gap-1">
-                                        <Label className="text-xs">Product</Label>
-                                        <Select value={li.product_id} onValueChange={(v) => {
-                                            updateLineItem(i, "product_id", v);
-                                            const catItem = catalogItems.find(c => c.product_id === v);
-                                            if (catItem) updateLineItem(i, "unit_price", catItem.unit_price);
-                                        }}>
-                                            <SelectTrigger className="h-9"><SelectValue placeholder="Select product..." /></SelectTrigger>
-                                            <SelectContent>
-                                                {catalogItems.length > 0 ? (
-                                                    catalogItems.map((c) => (
-                                                        <SelectItem key={c.product_id} value={c.product_id}>
-                                                            {c.product_name} {c.sku ? `(${c.sku})` : ""} — ${c.unit_price.toFixed(2)}
-                                                        </SelectItem>
-                                                    ))
-                                                ) : (
-                                                    products.map((p) => (
-                                                        <SelectItem key={p.id} value={p.id}>{p.name} ({p.sku})</SelectItem>
-                                                    ))
-                                                )}
-                                            </SelectContent>
-                                        </Select>
+                            {lineItems.map((li, i) => {
+                                const catItem = catalogItems.find(c => c.product_id === li.product_id);
+                                const availQty = catItem?.available_quantity;
+                                const overStock = availQty != null && li.quantity > availQty;
+                                return (
+                                    <div key={i} className="p-3 rounded-lg border bg-muted/30 space-y-2">
+                                        <div className="flex items-end gap-2">
+                                            <div className="flex-1 grid gap-1">
+                                                <Label className="text-xs">Product</Label>
+                                                <Select value={li.product_id} onValueChange={(v) => {
+                                                    updateLineItem(i, "product_id", v);
+                                                    const cat = catalogItems.find(c => c.product_id === v);
+                                                    if (cat) updateLineItem(i, "unit_price", cat.unit_price);
+                                                }}>
+                                                    <SelectTrigger className="h-9"><SelectValue placeholder="Select product..." /></SelectTrigger>
+                                                    <SelectContent>
+                                                        {catalogItems.length > 0 ? (
+                                                            catalogItems.map((c) => (
+                                                                <SelectItem key={c.product_id} value={c.product_id}>
+                                                                    {c.product_name} {c.sku ? `(${c.sku})` : ""} — ${c.unit_price.toFixed(2)}
+                                                                    {c.available_quantity != null ? ` • ${c.available_quantity} in stock` : ""}
+                                                                </SelectItem>
+                                                            ))
+                                                        ) : (
+                                                            products.map((p) => (
+                                                                <SelectItem key={p.id} value={p.id}>{p.name} ({p.sku})</SelectItem>
+                                                            ))
+                                                        )}
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            <div className="w-24 grid gap-1">
+                                                <Label className="text-xs">Qty</Label>
+                                                <Input type="number" className={`h-9 ${overStock ? "border-amber-500 bg-amber-50 dark:bg-amber-900/20" : ""}`} min={1} value={li.quantity}
+                                                    onChange={(e) => updateLineItem(i, "quantity", parseInt(e.target.value) || 1)} />
+                                            </div>
+                                            <div className="w-28 grid gap-1">
+                                                <Label className="text-xs">Catalog Price</Label>
+                                                <div className="h-9 flex items-center px-3 rounded-md bg-muted border text-sm font-semibold">
+                                                    ${li.unit_price.toFixed(2)}
+                                                </div>
+                                            </div>
+                                            <div className="w-24 text-right">
+                                                <p className="text-sm font-medium">${(li.quantity * li.unit_price).toFixed(2)}</p>
+                                            </div>
+                                            {lineItems.length > 1 && (
+                                                <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => removeLineItem(i)}>
+                                                    <X className="h-4 w-4 text-red-500" />
+                                                </Button>
+                                            )}
+                                        </div>
+                                        {/* Stock warning */}
+                                        {overStock && (
+                                            <p className="text-xs text-amber-600 font-medium pl-1">
+                                                ⚠️ Supplier only has {availQty} in stock — you're ordering {li.quantity - availQty!} more than available.
+                                                Consider splitting across suppliers.
+                                            </p>
+                                        )}
+                                        {availQty != null && !overStock && li.product_id && (
+                                            <p className="text-xs text-green-600 pl-1">✅ {availQty} available in supplier stock</p>
+                                        )}
                                     </div>
-                                    <div className="w-24 grid gap-1">
-                                        <Label className="text-xs">Qty</Label>
-                                        <Input type="number" className="h-9" min={1} value={li.quantity}
-                                            onChange={(e) => updateLineItem(i, "quantity", parseInt(e.target.value) || 1)} />
-                                    </div>
-                                    <div className="w-28 grid gap-1">
-                                        <Label className="text-xs">Unit Price ($)</Label>
-                                        <Input type="number" className="h-9" min={0} step={0.01} value={li.unit_price}
-                                            onChange={(e) => updateLineItem(i, "unit_price", parseFloat(e.target.value) || 0)} />
-                                    </div>
-                                    <div className="w-24 text-right">
-                                        <p className="text-sm font-medium">${(li.quantity * li.unit_price).toFixed(2)}</p>
-                                    </div>
-                                    {lineItems.length > 1 && (
-                                        <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => removeLineItem(i)}>
-                                            <X className="h-4 w-4 text-red-500" />
-                                        </Button>
-                                    )}
-                                </div>
-                            ))}
+                                );
+                            })}
                             <div className="flex justify-end p-2">
                                 <p className="text-lg font-bold">Total: ${totalAmount.toFixed(2)}</p>
                             </div>
@@ -554,10 +575,39 @@ export default function PurchaseOrdersPage() {
                                 </div>
 
                                 {/* Send Button */}
-                                {viewOrder.status === "sent" ? (
-                                    <div className="flex items-center gap-2 p-3 rounded-lg bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400 text-sm">
-                                        <CheckCircle className="h-4 w-4" />
-                                        Already sent{viewOrder.sent_at ? ` on ${new Date(viewOrder.sent_at).toLocaleDateString()}` : ""}
+                                {(viewOrder.status === "sent" || viewOrder.status === "approved" || viewOrder.status === "received" || viewOrder.status === "partially_received") ? (
+                                    <div className="space-y-3">
+                                        <div className="flex items-center gap-2 p-3 rounded-lg bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400 text-sm">
+                                            <CheckCircle className="h-4 w-4" />
+                                            <span>
+                                                Already sent{viewOrder.sent_at ? ` on ${new Date(viewOrder.sent_at).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : ""}
+                                            </span>
+                                        </div>
+                                        <Button
+                                            variant="outline"
+                                            className="w-full gap-2"
+                                            disabled={!viewOrder.supplier_email || submitting}
+                                            onClick={async () => {
+                                                setSubmitting(true);
+                                                try {
+                                                    const token = await getToken();
+                                                    if (!token) throw new Error("Not authenticated");
+                                                    const result = await sendPOToSupplier(viewOrder.id, token);
+                                                    toast.success(result.message || "PO resent to supplier");
+                                                    loadOrders();
+                                                } catch (err: any) {
+                                                    toast.error(err.message || "Failed to resend");
+                                                } finally {
+                                                    setSubmitting(false);
+                                                }
+                                            }}
+                                        >
+                                            {submitting ? (
+                                                <><Loader2 className="h-4 w-4 animate-spin" /> Resending...</>
+                                            ) : (
+                                                <><RefreshCw className="h-4 w-4" /> Resend to Supplier</>
+                                            )}
+                                        </Button>
                                     </div>
                                 ) : (
                                     <Button
@@ -569,11 +619,11 @@ export default function PurchaseOrdersPage() {
                                                 const token = await getToken();
                                                 if (!token) throw new Error("Not authenticated");
                                                 const result = await sendPOToSupplier(viewOrder.id, token);
-                                                alert(`✅ ${result.message}`);
+                                                toast.success(result.message || "PO sent to supplier");
                                                 loadOrders();
                                                 setViewOrder(null);
                                             } catch (err: any) {
-                                                alert(`❌ ${err.message || "Failed to send"}`);
+                                                toast.error(err.message || "Failed to send");
                                             } finally {
                                                 setSubmitting(false);
                                             }
@@ -592,7 +642,48 @@ export default function PurchaseOrdersPage() {
                             <TabsContent value="invoice" className="pt-4 space-y-4">
                                 <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
                                     <FileText className="h-4 w-4 inline mr-2 text-green-500" />
-                                    Paste the invoice text (from OCR or copy-paste) to perform 3-way matching against this PO.
+                                    Upload an invoice PDF or paste the text to perform 3-way matching against this PO.
+                                </div>
+
+                                {/* PDF Upload */}
+                                <div className="flex gap-2">
+                                    <Button
+                                        variant="outline"
+                                        className="gap-2 flex-1"
+                                        disabled={extractingPdf}
+                                        onClick={() => document.getElementById("invoice-pdf-upload")?.click()}
+                                    >
+                                        {extractingPdf ? (
+                                            <><Loader2 className="h-4 w-4 animate-spin" /> Extracting text from PDF...</>
+                                        ) : (
+                                            <><Upload className="h-4 w-4" /> Upload Invoice PDF</>
+                                        )}
+                                    </Button>
+                                    <input
+                                        id="invoice-pdf-upload"
+                                        type="file"
+                                        accept=".pdf"
+                                        className="hidden"
+                                        onChange={async (e) => {
+                                            const file = e.target.files?.[0];
+                                            if (!file) return;
+                                            setExtractingPdf(true);
+                                            try {
+                                                const text = await extractTextFromPDF(file);
+                                                if (text.trim()) {
+                                                    setInvoiceText(text.slice(0, INVOICE_MAX_CHARS));
+                                                    toast.success(`Extracted ${text.length} characters from ${file.name}`);
+                                                } else {
+                                                    toast.error("No text found in PDF. The PDF might be image-only (scanned). Try using Google Lens or Adobe Scan to OCR it first.");
+                                                }
+                                            } catch (err: any) {
+                                                toast.error(err.message || "Failed to read PDF");
+                                            } finally {
+                                                setExtractingPdf(false);
+                                                e.target.value = "";
+                                            }
+                                        }}
+                                    />
                                 </div>
 
                                 <div className="space-y-2">

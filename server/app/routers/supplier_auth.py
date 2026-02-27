@@ -3,7 +3,7 @@ Supplier Authentication Router.
 Handles login, account activation, password changes.
 """
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
@@ -49,7 +49,7 @@ async def supplier_login(data: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="Account is deactivated. Contact your buyer.")
 
     # Update last login
-    user.last_login_at = datetime.utcnow()
+    user.last_login_at = datetime.now(timezone.utc)
     db.commit()
 
     token = create_supplier_token(
@@ -87,7 +87,7 @@ async def activate_account(data: ActivateRequest, db: Session = Depends(get_db))
     if not invitation:
         raise HTTPException(status_code=400, detail="Invalid or expired invitation token")
 
-    if invitation.expires_at < datetime.utcnow():
+    if invitation.expires_at < datetime.now(timezone.utc):
         invitation.status = InvitationStatus.expired
         db.commit()
         raise HTTPException(status_code=400, detail="Invitation has expired. Contact your buyer for a new one.")
@@ -109,7 +109,7 @@ async def activate_account(data: ActivateRequest, db: Session = Depends(get_db))
     user.password_hash = hash_password(data.new_password)
     user.must_change_password = False
     user.is_active = True
-    user.last_login_at = datetime.utcnow()
+    user.last_login_at = datetime.now(timezone.utc)
 
     invitation.status = InvitationStatus.accepted
 

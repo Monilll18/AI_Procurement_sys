@@ -123,6 +123,7 @@ async def get_supplier_catalog(
             "unit_price": p.unit_price,
             "currency": p.currency,
             "min_order_qty": p.min_order_qty,
+            "available_quantity": p.available_quantity,
             "lead_time_days": p.lead_time_days,
         }
         for p in prices

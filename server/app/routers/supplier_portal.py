@@ -498,6 +498,7 @@ async def list_catalog(
             "unit_price": p.unit_price,
             "currency": p.currency,
             "min_order_qty": p.min_order_qty,
+            "available_quantity": p.available_quantity,
             "lead_time_days": p.lead_time_days,
             "valid_from": str(p.valid_from) if p.valid_from else None,
             "valid_to": str(p.valid_to) if p.valid_to else None,
@@ -620,6 +621,7 @@ class AddToCatalogRequest(BaseModel):
     unit_price: float
     currency: str = "USD"
     min_order_qty: Optional[int] = None
+    available_quantity: Optional[int] = None
     lead_time_days: Optional[int] = None
 
 
@@ -651,6 +653,7 @@ async def add_to_catalog(
         unit_price=data.unit_price,
         currency=data.currency,
         min_order_qty=data.min_order_qty,
+        available_quantity=data.available_quantity,
         lead_time_days=data.lead_time_days,
         valid_from=date.today(),
         is_active=True,
@@ -686,6 +689,32 @@ async def remove_from_catalog(
     db.commit()
 
     return {"message": f"{product_name} removed from your catalog"}
+
+
+class UpdateStockRequest(BaseModel):
+    available_quantity: int
+
+
+@router.patch("/catalog/{price_id}/stock")
+async def update_catalog_stock(
+    price_id: UUID,
+    data: UpdateStockRequest,
+    supplier_user: dict = Depends(get_current_supplier_user),
+    db: Session = Depends(get_db),
+):
+    """Update available quantity for a catalog item."""
+    sp = db.query(SupplierPrice).filter(
+        SupplierPrice.id == price_id,
+        SupplierPrice.supplier_id == supplier_user["supplier_id"],
+    ).first()
+    if not sp:
+        raise HTTPException(status_code=404, detail="Catalog item not found")
+
+    sp.available_quantity = data.available_quantity
+    db.commit()
+
+    product_name = sp.product.name if sp.product else "Product"
+    return {"message": f"Stock updated: {product_name} → {data.available_quantity} units"}
 
 # ═══════════════════════════════════════════════════════════════
 # ─── INVOICING ────────────────────────────────────────────────
@@ -917,3 +946,56 @@ def _format_invoice(inv: SupplierInvoice) -> dict:
             for li in (inv.line_items or [])
         ],
     }
+
+
+@router.get("/invoices/{invoice_id}/pdf")
+async def download_invoice_pdf(
+    invoice_id: UUID,
+    supplier_user: dict = Depends(get_current_supplier_user),
+    db: Session = Depends(get_db),
+):
+    """Generate and download an invoice as PDF."""
+    import io
+    from starlette.responses import StreamingResponse
+    from app.services.invoice_pdf_service import generate_invoice_pdf
+
+    inv = db.query(SupplierInvoice).filter(
+        SupplierInvoice.id == invoice_id,
+        SupplierInvoice.supplier_id == supplier_user["supplier_id"],
+    ).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    supplier = db.query(Supplier).filter(Supplier.id == inv.supplier_id).first()
+    po = inv.purchase_order
+
+    pdf_bytes = generate_invoice_pdf(
+        invoice_number=inv.invoice_number,
+        po_number=po.po_number if po else "",
+        supplier_name=supplier.name if supplier else "Unknown",
+        supplier_email=supplier.email if supplier else "",
+        invoice_date=str(inv.invoice_date) if inv.invoice_date else "",
+        due_date=str(inv.due_date) if inv.due_date else "",
+        subtotal=float(inv.subtotal),
+        tax_amount=float(inv.tax_amount),
+        total_amount=float(inv.total_amount),
+        currency=inv.currency or "USD",
+        notes=inv.notes or "",
+        status=inv.status.value if inv.status else "draft",
+        match_status=inv.match_status or "",
+        line_items=[
+            {
+                "description": li.description,
+                "quantity": li.quantity,
+                "unit_price": li.unit_price,
+                "total_price": li.total_price,
+            }
+            for li in (inv.line_items or [])
+        ],
+    )
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{inv.invoice_number}.pdf"'},
+    )

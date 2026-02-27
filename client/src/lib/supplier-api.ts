@@ -262,6 +262,7 @@ export interface CatalogItem {
     unit_price: number;
     currency: string;
     min_order_qty: number | null;
+    available_quantity: number | null;
     lead_time_days: number | null;
     valid_from: string | null;
     valid_to: string | null;
@@ -302,6 +303,7 @@ export const addToCatalog = (data: {
     unit_price: number;
     currency?: string;
     min_order_qty?: number;
+    available_quantity?: number;
     lead_time_days?: number;
 }) =>
     supplierFetch<{ message: string; id: string; product_name: string }>("/api/supplier-portal/catalog/add", {
@@ -312,6 +314,12 @@ export const addToCatalog = (data: {
 export const removeFromCatalog = (priceId: string) =>
     supplierFetch<{ message: string }>(`/api/supplier-portal/catalog/${priceId}`, {
         method: "DELETE",
+    });
+
+export const updateCatalogStock = (priceId: string, available_quantity: number) =>
+    supplierFetch<{ message: string }>(`/api/supplier-portal/catalog/${priceId}/stock`, {
+        method: "PATCH",
+        body: JSON.stringify({ available_quantity }),
     });
 
 export const submitPriceUpdate = (data: {
@@ -396,3 +404,17 @@ export const submitInvoice = (id: string) =>
         method: "POST",
     });
 
+export const downloadInvoicePdf = async (id: string, filename: string = "invoice.pdf") => {
+    const token = localStorage.getItem("supplier_token");
+    const res = await fetch(`${API_BASE}/api/supplier-portal/invoices/${id}/pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error("Failed to download invoice PDF");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+};

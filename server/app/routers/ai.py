@@ -512,6 +512,19 @@ async def match_invoice_endpoint(request: Request, data: InvoiceMatchRequest, db
                     for item, prod in items
                 ],
             }
+            # Auto-populate received items from DB if not provided
+            if not data.received_items:
+                received = [
+                    {
+                        "product_name": prod.name,
+                        "quantity_ordered": item.quantity,
+                        "quantity_received": item.quantity_received,
+                    }
+                    for item, prod in items
+                    if item.quantity_received > 0
+                ]
+                if received:
+                    data.received_items = received
 
     result = await match_invoice_to_po(
         invoice_text=data.invoice_text,

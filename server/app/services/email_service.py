@@ -1,29 +1,56 @@
 """
-Email notification service using Resend API.
+Email notification service using Gmail SMTP.
 Sends professional HTML emails for procurement events.
+Uses Python built-in smtplib — no extra packages required.
+
+Setup:
+  1. Enable 2-Step Verification on your Google Account
+  2. Go to https://myaccount.google.com/apppasswords
+  3. Generate an App Password for "Mail"
+  4. Add to .env:
+       GMAIL_USER=your@gmail.com
+       GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
 """
 import os
+import ssl
+import smtplib
 import logging
-from typing import Optional
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 logger = logging.getLogger(__name__)
 
-RESEND_API_KEY = os.getenv("RESEND_API", "")
-FROM_EMAIL = os.getenv("EMAIL_FROM", "ProcureAI <onboarding@resend.dev>")  # Resend test domain
+GMAIL_USER = os.getenv("GMAIL_USER", "")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
+FROM_NAME = os.getenv("EMAIL_FROM_NAME", "ProcureAI")
 
 
-def _get_client():
-    """Lazy-load Resend client."""
-    if not RESEND_API_KEY:
-        logger.warning("RESEND_API key not configured — emails disabled")
-        return None
+# ─── Send Functions ──────────────────────────────────────────
+
+def send_email(to: str, subject: str, html: str) -> bool:
+    """Send an HTML email via Gmail SMTP. Returns True on success."""
+    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
+        logger.warning("Gmail SMTP not configured (missing GMAIL_USER / GMAIL_APP_PASSWORD) — email skipped")
+        return False
+
     try:
-        import resend
-        resend.api_key = RESEND_API_KEY
-        return resend
-    except ImportError:
-        logger.error("resend package not installed. Run: pip install resend")
-        return None
+        msg = MIMEMultipart("alternative")
+        msg["From"] = f"{FROM_NAME} <{GMAIL_USER}>"
+        msg["To"] = to
+        msg["Subject"] = subject
+        msg.attach(MIMEText(html, "html"))
+
+        context = ssl.create_default_context()
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls(context=context)
+            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+            server.sendmail(GMAIL_USER, to, msg.as_string())
+
+        logger.info(f"✅ Email sent: to={to} subject={subject}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Email send failed: to={to} error={e}")
+        return False
 
 
 # ─── Email Templates ─────────────────────────────────────────
@@ -72,29 +99,6 @@ def _base_template(title: str, body: str, cta_text: str = "", cta_link: str = ""
     </body>
     </html>
     """
-
-
-# ─── Send Functions ──────────────────────────────────────────
-
-def send_email(to: str, subject: str, html: str) -> bool:
-    """Send an email via Resend. Returns True on success."""
-    client = _get_client()
-    if not client:
-        logger.info(f"Email skipped (no API key): to={to} subject={subject}")
-        return False
-
-    try:
-        result = client.Emails.send({
-            "from": FROM_EMAIL,
-            "to": [to],
-            "subject": subject,
-            "html": html,
-        })
-        logger.info(f"Email sent: to={to} subject={subject} id={result.get('id', 'unknown')}")
-        return True
-    except Exception as e:
-        logger.error(f"Email send failed: to={to} error={e}")
-        return False
 
 
 # ─── Notification Helpers ────────────────────────────────────

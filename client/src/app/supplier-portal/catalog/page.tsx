@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import {
     getCatalog, submitPriceUpdate, getPriceUpdates,
-    getAvailableProducts, addToCatalog, removeFromCatalog,
+    getAvailableProducts, addToCatalog, removeFromCatalog, updateCatalogStock,
     type CatalogItem, type PriceUpdate, type AvailableProduct,
 } from "@/lib/supplier-api";
 
@@ -43,6 +43,7 @@ export default function CatalogPage() {
     const [selectedProduct, setSelectedProduct] = useState<AvailableProduct | null>(null);
     const [addPrice, setAddPrice] = useState("");
     const [addMinQty, setAddMinQty] = useState("");
+    const [addAvailableQty, setAddAvailableQty] = useState("");
     const [addLeadTime, setAddLeadTime] = useState("");
     const [adding, setAdding] = useState(false);
 
@@ -75,6 +76,7 @@ export default function CatalogPage() {
             setSelectedProduct(null);
             setAddPrice("");
             setAddMinQty("");
+            setAddAvailableQty("");
             setAddLeadTime("");
             setShowAdd(true);
         } catch (err) {
@@ -90,6 +92,7 @@ export default function CatalogPage() {
                 product_id: selectedProduct.id,
                 unit_price: parseFloat(addPrice),
                 min_order_qty: addMinQty ? parseInt(addMinQty) : undefined,
+                available_quantity: addAvailableQty ? parseInt(addAvailableQty) : undefined,
                 lead_time_days: addLeadTime ? parseInt(addLeadTime) : undefined,
             });
             setShowAdd(false);
@@ -188,6 +191,7 @@ export default function CatalogPage() {
                                         <TableHead>Product</TableHead>
                                         <TableHead>Category</TableHead>
                                         <TableHead className="text-right">Unit Price</TableHead>
+                                        <TableHead className="text-center">Stock</TableHead>
                                         <TableHead className="text-center">Min Qty</TableHead>
                                         <TableHead className="text-center">Lead Time</TableHead>
                                         <TableHead className="text-right">Actions</TableHead>
@@ -202,6 +206,25 @@ export default function CatalogPage() {
                                             </TableCell>
                                             <TableCell className="text-right font-semibold">
                                                 ${item.unit_price.toFixed(2)}
+                                            </TableCell>
+                                            <TableCell className="text-center">
+                                                <Input
+                                                    type="number"
+                                                    className="w-20 h-7 text-center text-xs mx-auto"
+                                                    defaultValue={item.available_quantity ?? ""}
+                                                    placeholder="∞"
+                                                    onBlur={async (e) => {
+                                                        const val = e.target.value;
+                                                        if (val && parseInt(val) !== item.available_quantity) {
+                                                            try {
+                                                                await updateCatalogStock(item.id, parseInt(val));
+                                                                load();
+                                                            } catch (err: any) {
+                                                                alert(err.message);
+                                                            }
+                                                        }
+                                                    }}
+                                                />
                                             </TableCell>
                                             <TableCell className="text-center">{item.min_order_qty || "—"}</TableCell>
                                             <TableCell className="text-center">
@@ -331,7 +354,7 @@ export default function CatalogPage() {
                                 </p>
                             </div>
 
-                            <div className="grid grid-cols-3 gap-3">
+                            <div className="grid grid-cols-2 gap-3">
                                 <div className="space-y-1.5">
                                     <label className="text-sm font-medium">Unit Price *</label>
                                     <Input
@@ -340,6 +363,15 @@ export default function CatalogPage() {
                                         placeholder="0.00"
                                         value={addPrice}
                                         onChange={(e) => setAddPrice(e.target.value)}
+                                    />
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label className="text-sm font-medium">Available Qty *</label>
+                                    <Input
+                                        type="number"
+                                        placeholder="100"
+                                        value={addAvailableQty}
+                                        onChange={(e) => setAddAvailableQty(e.target.value)}
                                     />
                                 </div>
                                 <div className="space-y-1.5">

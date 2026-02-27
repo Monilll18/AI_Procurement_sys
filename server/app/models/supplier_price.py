@@ -16,6 +16,7 @@ class SupplierPrice(Base):
     unit_price = Column(Float, nullable=False)
     currency = Column(String(10), nullable=False, default="USD")
     min_order_qty = Column(Integer, nullable=True)
+    available_quantity = Column(Integer, nullable=True)  # NULL = unlimited/not tracked
     lead_time_days = Column(Integer, nullable=True)
     valid_from = Column(Date, nullable=False)
     valid_to = Column(Date, nullable=True)

@@ -17,11 +17,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
     Search, Truck, Star, Phone, Mail, MapPin, Loader2, Plus, Sparkles,
     Upload, FileText, CheckCircle, AlertTriangle, X, DollarSign, Clock,
+    Trash2, ExternalLink, Copy, RefreshCw, KeyRound,
 } from "lucide-react";
+import { ConfirmModal } from "@/components/ConfirmModal";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
-    getSuppliers, createSupplier, deleteSupplier, aiScoreSupplier, aiParsePriceSheet,
-    type Supplier,
+    getSuppliers, createSupplier, deleteSupplier, resendSupplierInvite,
+    aiScoreSupplier, aiParsePriceSheet,
+    type Supplier, type PortalCredentials,
 } from "@/lib/api";
 import { useAuth } from "@clerk/nextjs";
 import { useAICall } from "@/hooks/useAICall";
@@ -38,11 +41,11 @@ export default function SuppliersPage() {
     const [search, setSearch] = useState("");
     const [dialogOpen, setDialogOpen] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [deleting, setDeleting] = useState(false);
     const [viewSupplier, setViewSupplier] = useState<Supplier | null>(null);
 
     const [formData, setFormData] = useState({
         name: "", email: "", phone: "", address: "", rating: 4.0, status: "active" as const,
+        send_portal_invite: true,
     });
     const [aiScore, setAiScore] = useState<any>(null);
     const [aiScoreLoading, setAiScoreLoading] = useState(false);
@@ -53,6 +56,14 @@ export default function SuppliersPage() {
     const [ocrResult, setOcrResult] = useState<any>(null);
     const [ocrError, setOcrError] = useState("");
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // Delete confirmation modal state
+    const [deleteTarget, setDeleteTarget] = useState<Supplier | null>(null);
+    const [deleting, setDeleting] = useState(false);
+
+    // Portal credentials modal state
+    const [credentials, setCredentials] = useState<PortalCredentials | null>(null);
+    const [resending, setResending] = useState(false);
 
     const loadSuppliers = () => {
         setLoading(true);
@@ -87,7 +98,7 @@ export default function SuppliersPage() {
     );
 
     const openCreate = () => {
-        setFormData({ name: "", email: "", phone: "", address: "", rating: 4.0, status: "active" });
+        setFormData({ name: "", email: "", phone: "", address: "", rating: 4.0, status: "active", send_portal_invite: true });
         setDialogOpen(true);
     };
 
@@ -95,28 +106,18 @@ export default function SuppliersPage() {
         setSaving(true);
         try {
             const token = await getToken() || "";
-            await createSupplier(formData, token);
+            const result = await createSupplier(formData, token);
             setDialogOpen(false);
             loadSuppliers();
+
+            // Show portal credentials if they were generated
+            if (result.portal_credentials) {
+                setCredentials(result.portal_credentials);
+            }
         } catch (err: any) {
             alert(err.message || "Failed to add supplier");
         } finally {
             setSaving(false);
-        }
-    };
-
-    const handleDeleteSupplier = async (id: string) => {
-        if (!confirm("Are you sure you want to delete this supplier?")) return;
-        setDeleting(true);
-        try {
-            const token = await getToken() || "";
-            await deleteSupplier(id, token);
-            setViewSupplier(null);
-            loadSuppliers();
-        } catch (err: any) {
-            alert(err.message || "Failed to delete supplier");
-        } finally {
-            setDeleting(false);
         }
     };
 
@@ -315,6 +316,24 @@ export default function SuppliersPage() {
                                 </Select>
                             </div>
                         </div>
+                        {/* Portal Invite Toggle */}
+                        <div className="flex items-center gap-3 p-3 rounded-lg border bg-violet-50/50 dark:bg-violet-900/10">
+                            <input
+                                type="checkbox"
+                                id="portal-invite"
+                                checked={formData.send_portal_invite}
+                                onChange={(e) => setFormData({ ...formData, send_portal_invite: e.target.checked })}
+                                className="h-4 w-4 rounded border-gray-300 text-violet-600"
+                            />
+                            <div>
+                                <label htmlFor="portal-invite" className="text-sm font-medium cursor-pointer">
+                                    Send Portal Invite
+                                </label>
+                                <p className="text-xs text-muted-foreground">
+                                    Creates login credentials so the supplier can access their portal
+                                </p>
+                            </div>
+                        </div>
                     </div>
                     <DialogFooter>
                         <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
@@ -383,19 +402,50 @@ export default function SuppliersPage() {
                                         </div>
                                     )}
                                 </div>
-                                <div className="text-xs text-muted-foreground border-t pt-3 flex justify-between items-center">
+                                <div className="text-xs text-muted-foreground border-t pt-3 flex items-center justify-between">
                                     <span>Added on {new Date(viewSupplier.created_at).toLocaleDateString()}</span>
-                                    {can("delete_supplier") && (
-                                        <Button
-                                            variant="destructive"
-                                            size="sm"
-                                            onClick={() => handleDeleteSupplier(viewSupplier.id)}
-                                            disabled={deleting}
+                                    <div className="flex items-center gap-2">
+                                        <a
+                                            href="/supplier-portal/login"
+                                            target="_blank"
+                                            className="text-violet-600 hover:underline flex items-center gap-1"
                                         >
-                                            {deleting ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
-                                            Delete Supplier
+                                            <ExternalLink className="h-3 w-3" /> Portal
+                                        </a>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="text-violet-600 hover:text-violet-700 hover:bg-violet-50 h-7 text-xs"
+                                            disabled={resending}
+                                            onClick={async () => {
+                                                setResending(true);
+                                                try {
+                                                    const token = await getToken() || "";
+                                                    const res = await resendSupplierInvite(viewSupplier.id, token);
+                                                    setCredentials(res.portal_credentials);
+                                                } catch (err: any) {
+                                                    alert(err.message || "Failed to resend invite");
+                                                } finally {
+                                                    setResending(false);
+                                                }
+                                            }}
+                                        >
+                                            {resending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                                            Resend Invite
                                         </Button>
-                                    )}
+                                        {can("delete_supplier") && (
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                                                onClick={() => {
+                                                    setDeleteTarget(viewSupplier);
+                                                }}
+                                            >
+                                                <Trash2 className="h-4 w-4 mr-1" /> Delete
+                                            </Button>
+                                        )}
+                                    </div>
                                 </div>
                             </TabsContent>
 
@@ -586,6 +636,114 @@ export default function SuppliersPage() {
                             </TabsContent>
                         </Tabs>
                     )}
+                </DialogContent>
+            </Dialog>
+
+            {/* Delete Supplier Confirmation Modal */}
+            <ConfirmModal
+                open={!!deleteTarget}
+                onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
+                title={`Delete "${deleteTarget?.name}"?`}
+                description="This will permanently remove the supplier, their portal account, catalog, and invoices. Purchase orders will be kept but unlinked. This action cannot be undone."
+                confirmLabel="Delete Supplier"
+                variant="danger"
+                loading={deleting}
+                onConfirm={async () => {
+                    if (!deleteTarget) return;
+                    setDeleting(true);
+                    try {
+                        const token = await getToken() || "";
+                        await deleteSupplier(deleteTarget.id, token);
+                        setDeleteTarget(null);
+                        setViewSupplier(null);
+                        loadSuppliers();
+                    } catch (err: any) {
+                        alert(err.message || "Failed to delete supplier");
+                    } finally {
+                        setDeleting(false);
+                    }
+                }}
+            />
+
+            {/* Portal Credentials Modal */}
+            <Dialog open={!!credentials} onOpenChange={(open) => { if (!open) setCredentials(null); }}>
+                <DialogContent className="sm:max-w-[480px]">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <div className="p-2 rounded-full bg-violet-100 text-violet-600">
+                                <KeyRound className="h-5 w-5" />
+                            </div>
+                            Supplier Portal Credentials
+                        </DialogTitle>
+                        <DialogDescription>
+                            Share these credentials with the supplier so they can access their portal.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    {credentials && (
+                        <div className="space-y-4 py-2">
+                            {!credentials.email_sent && (
+                                <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+                                    <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                                    <span>Email delivery failed — please share these credentials manually.</span>
+                                </div>
+                            )}
+                            {credentials.email_sent && (
+                                <div className="flex items-start gap-2 p-3 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm">
+                                    <CheckCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                                    <span>Invitation email sent successfully! You can also copy credentials below.</span>
+                                </div>
+                            )}
+
+                            {/* Credential fields */}
+                            {[
+                                { label: "Email", value: credentials.email, icon: <Mail className="h-4 w-4" /> },
+                                { label: "Temporary Password", value: credentials.temp_password, icon: <KeyRound className="h-4 w-4" /> },
+                                { label: "Portal Login URL", value: credentials.portal_url, icon: <ExternalLink className="h-4 w-4" /> },
+                            ].map((field) => (
+                                <div key={field.label} className="space-y-1">
+                                    <label className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
+                                        {field.icon} {field.label}
+                                    </label>
+                                    <div className="flex items-center gap-2">
+                                        <code className="flex-1 px-3 py-2 rounded-md bg-muted font-mono text-sm select-all break-all">
+                                            {field.value}
+                                        </code>
+                                        <Button
+                                            variant="outline"
+                                            size="icon"
+                                            className="shrink-0 h-9 w-9"
+                                            onClick={() => {
+                                                navigator.clipboard.writeText(field.value);
+                                            }}
+                                        >
+                                            <Copy className="h-4 w-4" />
+                                        </Button>
+                                    </div>
+                                </div>
+                            ))}
+
+                            <div className="text-xs text-muted-foreground pt-2 border-t">
+                                The supplier will be asked to change their password on first login.
+                            </div>
+                        </div>
+                    )}
+
+                    <DialogFooter>
+                        <Button
+                            variant="outline"
+                            onClick={() => {
+                                if (credentials) {
+                                    navigator.clipboard.writeText(
+                                        `Supplier Portal Login\nEmail: ${credentials.email}\nPassword: ${credentials.temp_password}\nURL: ${credentials.portal_url}`
+                                    );
+                                }
+                            }}
+                        >
+                            <Copy className="h-4 w-4 mr-2" /> Copy All
+                        </Button>
+                        <Button onClick={() => setCredentials(null)}>Done</Button>
+                    </DialogFooter>
                 </DialogContent>
             </Dialog>
         </div>

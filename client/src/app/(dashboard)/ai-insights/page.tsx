@@ -14,11 +14,14 @@ import {
     AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
     ResponsiveContainer, Legend, ReferenceLine,
 } from "recharts";
-import { getInsights, getForecast, Insight, ForecastPoint, aiFraudScan, aiGetPriceAnomalies, aiGetProductForecast, ProductForecast } from "@/lib/api";
+import { getInsights, getForecast, Insight, ForecastPoint, aiFraudScan, aiGetPriceAnomalies, aiGetProductForecast, ProductForecast, getPriceUpdates, approvePriceUpdate, rejectPriceUpdate, type PriceUpdateItem } from "@/lib/api";
+import { useAuth } from "@clerk/nextjs";
+import { CheckCircle, XCircle } from "lucide-react";
 
 // ─── Tab config ──────────────────────────────────────────────
 const TABS = [
     { id: "overview", label: "Overview", icon: BarChart2 },
+    { id: "price-changes", label: "Supplier Price Changes", icon: DollarSign },
     { id: "demand", label: "Demand Forecast", icon: TrendingUp },
     { id: "fraud", label: "Fraud Detection", icon: Shield },
     { id: "anomalies", label: "Price Anomalies", icon: Search },
@@ -26,11 +29,13 @@ const TABS = [
 type TabId = typeof TABS[number]["id"];
 
 export default function AIInsightsPage() {
+    const { getToken } = useAuth();
     const [insights, setInsights] = useState<Insight[]>([]);
     const [forecast, setForecast] = useState<ForecastPoint[]>([]);
     const [productForecast, setProductForecast] = useState<ProductForecast[]>([]);
     const [fraudAlerts, setFraudAlerts] = useState<any[]>([]);
     const [priceAnomalies, setPriceAnomalies] = useState<any[]>([]);
+    const [supplierPriceUpdates, setSupplierPriceUpdates] = useState<PriceUpdateItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [mlLoading, setMlLoading] = useState(false);
     const [activeTab, setActiveTab] = useState<TabId>("overview");
@@ -47,15 +52,18 @@ export default function AIInsightsPage() {
             .finally(() => setLoading(false));
     };
 
-    const loadMLData = () => {
+    const loadMLData = async () => {
         setMlLoading(true);
+        const token = (await getToken()) || undefined;
         Promise.all([
             aiFraudScan().catch(() => []),
             aiGetPriceAnomalies().catch(() => []),
+            getPriceUpdates(undefined, token).catch(() => []),
         ])
-            .then(([fraud, anomalies]) => {
+            .then(([fraud, anomalies, priceUpdates]) => {
                 setFraudAlerts(fraud);
                 setPriceAnomalies(anomalies);
+                setSupplierPriceUpdates(priceUpdates);
             })
             .catch(console.error)
             .finally(() => setMlLoading(false));
@@ -147,6 +155,11 @@ export default function AIInsightsPage() {
                             {tab.id === "anomalies" && priceAnomalies.length > 0 && (
                                 <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-purple-500 text-white">
                                     {priceAnomalies.length}
+                                </span>
+                            )}
+                            {tab.id === "price-changes" && supplierPriceUpdates.filter(u => u.status === "pending").length > 0 && (
+                                <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-amber-500 text-white">
+                                    {supplierPriceUpdates.filter(u => u.status === "pending").length}
                                 </span>
                             )}
                         </button>
@@ -408,6 +421,113 @@ export default function AIInsightsPage() {
                             {priceAnomalies.map((anomaly, i) => (
                                 <PriceAnomalyCard key={i} anomaly={anomaly} />
                             ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ─── Tab: Supplier Price Changes ────────────────────── */}
+            {activeTab === "price-changes" && (
+                <div className="space-y-4">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <DollarSign className="h-5 w-5 text-amber-500" /> Supplier Price Change Requests
+                            </CardTitle>
+                            <CardDescription>
+                                Review price updates submitted by suppliers. Approving updates the supplier&apos;s catalog price automatically.
+                            </CardDescription>
+                        </CardHeader>
+                    </Card>
+
+                    {mlLoading ? (
+                        <div className="flex items-center justify-center py-12">
+                            <Loader2 className="h-6 w-6 animate-spin text-amber-500 mr-2" />
+                            <span className="text-muted-foreground">Loading price updates...</span>
+                        </div>
+                    ) : supplierPriceUpdates.length === 0 ? (
+                        <Card className="p-8 text-center border-green-500/30 bg-green-500/5">
+                            <p className="text-green-600 dark:text-green-400 font-medium">✅ No supplier price change requests. All prices are up to date.</p>
+                        </Card>
+                    ) : (
+                        <div className="space-y-3">
+                            {supplierPriceUpdates.map((pu) => {
+                                const isIncrease = pu.change_percent > 0;
+                                const isPending = pu.status === "pending";
+                                return (
+                                    <Card key={pu.id} className={`overflow-hidden border-l-4 ${pu.status === "approved" ? "border-l-green-500 opacity-70" :
+                                            pu.status === "rejected" ? "border-l-red-500 opacity-70" :
+                                                isIncrease ? "border-l-red-400" : "border-l-green-400"
+                                        }`}>
+                                        <CardContent className="p-4">
+                                            <div className="flex items-center justify-between gap-4">
+                                                <div className="flex items-center gap-3 flex-1 min-w-0">
+                                                    <div className={`p-2 rounded-lg ${isIncrease ? "bg-red-100 dark:bg-red-900/30" : "bg-green-100 dark:bg-green-900/30"}`}>
+                                                        {isIncrease
+                                                            ? <TrendingUp className="h-5 w-5 text-red-500" />
+                                                            : <TrendingDown className="h-5 w-5 text-green-500" />}
+                                                    </div>
+                                                    <div className="min-w-0">
+                                                        <p className="font-semibold text-sm truncate">{pu.product_name}</p>
+                                                        <p className="text-xs text-muted-foreground">
+                                                            by <span className="font-medium">{pu.supplier_name}</span> • Effective: {pu.effective_date}
+                                                        </p>
+                                                    </div>
+                                                </div>
+
+                                                <div className="text-right shrink-0">
+                                                    <div className="flex items-center gap-2 text-sm">
+                                                        <span className="text-muted-foreground">${pu.current_price.toFixed(2)}</span>
+                                                        <span>→</span>
+                                                        <span className="font-bold">${pu.proposed_price.toFixed(2)}</span>
+                                                    </div>
+                                                    <span className={`text-xs font-semibold ${isIncrease ? "text-red-500" : "text-green-500"}`}>
+                                                        {isIncrease ? "+" : ""}{pu.change_percent.toFixed(1)}%
+                                                    </span>
+                                                </div>
+
+                                                {isPending ? (
+                                                    <div className="flex items-center gap-1 shrink-0">
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            className="text-green-600 border-green-200 hover:bg-green-50 gap-1"
+                                                            onClick={async () => {
+                                                                const token = (await getToken()) || undefined;
+                                                                await approvePriceUpdate(pu.id, undefined, token);
+                                                                loadMLData();
+                                                            }}
+                                                        >
+                                                            <CheckCircle className="h-4 w-4" /> Approve
+                                                        </Button>
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            className="text-red-600 border-red-200 hover:bg-red-50 gap-1"
+                                                            onClick={async () => {
+                                                                const token = (await getToken()) || undefined;
+                                                                await rejectPriceUpdate(pu.id, undefined, token);
+                                                                loadMLData();
+                                                            }}
+                                                        >
+                                                            <XCircle className="h-4 w-4" /> Reject
+                                                        </Button>
+                                                    </div>
+                                                ) : (
+                                                    <Badge variant="outline" className={`shrink-0 text-xs ${pu.status === "approved"
+                                                            ? "border-green-300 text-green-600 bg-green-50 dark:bg-green-900/30"
+                                                            : "border-red-300 text-red-600 bg-red-50 dark:bg-red-900/30"
+                                                        }`}>
+                                                        {pu.status === "approved" ? "✅ Approved" : "❌ Rejected"}
+                                                    </Badge>
+                                                )}
+                                            </div>
+                                            {pu.reason && <p className="text-xs text-muted-foreground mt-2 pl-11">Reason: {pu.reason}</p>}
+                                            {pu.review_notes && <p className="text-xs mt-1 pl-11 text-amber-600">Review: {pu.review_notes}</p>}
+                                        </CardContent>
+                                    </Card>
+                                );
+                            })}
                         </div>
                     )}
                 </div>

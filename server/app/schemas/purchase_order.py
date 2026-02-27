@@ -24,9 +24,11 @@ class POLineItemCreate(BaseModel):
 class POLineItemResponse(BaseModel):
     id: UUID
     product_id: UUID
+    product_name: Optional[str] = None
     quantity: int
     unit_price: float
     total_price: float
+    quantity_received: Optional[int] = 0
 
     model_config = {"from_attributes": True}
 
@@ -41,17 +43,20 @@ class PurchaseOrderCreate(BaseModel):
 class PurchaseOrderResponse(BaseModel):
     id: UUID
     po_number: str
-    supplier_id: UUID
+    supplier_id: Optional[UUID] = None
     created_by: str
     status: POStatusEnum
     total_amount: float
     expected_delivery: Optional[date] = None
     notes: Optional[str] = None
+    pdf_url: Optional[str] = None
+    sent_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
     line_items: List[POLineItemResponse] = []
 
-    # Nested supplier name for display
+    # Nested supplier info for display
     supplier_name: Optional[str] = None
+    supplier_email: Optional[str] = None
 
     model_config = {"from_attributes": True}
