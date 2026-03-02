@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,12 +19,13 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import {
     Plus, Search, FileText, Loader2, Send, CheckCircle, XCircle,
-    ArrowUpRight, Clock, AlertTriangle, Sparkles, ChevronDown, Trash2,
+    ArrowUpRight, Clock, AlertTriangle, Sparkles, ChevronDown, Trash2, Package,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useRBAC } from "@/lib/rbac";
 import { useAuth } from "@clerk/nextjs";
+import { toast } from "sonner";
 import {
     getRequisitions, createRequisition, submitRequisition,
     approveRequisition, rejectRequisition, convertPRtoPO,
@@ -32,6 +33,9 @@ import {
     type PurchaseRequisition, type PRLineItem,
     getProducts, type Product,
     getSuppliers, type Supplier,
+    getDepartments, type DepartmentData,
+    getSupplierPriceComparison,
+    getSupplierCoverage, type SupplierCoverageItem,
 } from "@/lib/api";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
@@ -63,12 +67,25 @@ export default function RequisitionsPage() {
     const [selectedPR, setSelectedPR] = useState<PurchaseRequisition | null>(null);
     const [products, setProducts] = useState<Product[]>([]);
     const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+    const [departments, setDepartments] = useState<DepartmentData[]>([]);
     const [rejectReason, setRejectReason] = useState("");
     const [showReject, setShowReject] = useState(false);
     const [actionLoading, setActionLoading] = useState("");
     const [nlInput, setNlInput] = useState("");
     const [nlParsing, setNlParsing] = useState(false);
     const [showAIAssist, setShowAIAssist] = useState(false);
+    // Product search state for line items
+    const [productSearchIdx, setProductSearchIdx] = useState<number | null>(null);
+    const [productQuery, setProductQuery] = useState("");
+    // Cache for product prices { productId: lowestPrice }
+    const priceCache = useRef<Record<string, number>>({});
+    // Supplier selection for PR→PO conversion
+    const [showSupplierPicker, setShowSupplierPicker] = useState(false);
+    const [convertingPR, setConvertingPR] = useState<PurchaseRequisition | null>(null);
+    const [selectedSupplierId, setSelectedSupplierId] = useState<string>("");
+    const [converting, setConverting] = useState(false);
+    const [coverageData, setCoverageData] = useState<SupplierCoverageItem[]>([]);
+    const [coverageLoading, setCoverageLoading] = useState(false);
 
     // Create form state
     const [form, setForm] = useState({
@@ -90,18 +107,65 @@ export default function RequisitionsPage() {
     const loadData = async () => {
         setLoading(true);
         try {
-            const [prData, prodData, suppData] = await Promise.all([
+            const [prData, prodData, suppData, deptData] = await Promise.all([
                 getRequisitions().catch(() => []),
                 getProducts().catch(() => []),
                 getSuppliers().catch(() => []),
+                getDepartments().catch(() => []),
             ]);
             setPrs(prData);
             setProducts(prodData);
             setSuppliers(suppData);
+            setDepartments(deptData);
         } finally {
             setLoading(false);
         }
     };
+
+    // Fetch lowest supplier price for a product and cache it
+    const fetchProductPrice = async (productId: string): Promise<number> => {
+        if (priceCache.current[productId] !== undefined) return priceCache.current[productId];
+        try {
+            const prices = await getSupplierPriceComparison(productId);
+            if (prices && prices.length > 0) {
+                const lowest = Math.min(...prices.map(p => p.unit_price));
+                priceCache.current[productId] = lowest;
+                return lowest;
+            }
+        } catch { /* no prices available */ }
+        priceCache.current[productId] = 0;
+        return 0;
+    };
+
+    // Select a product for a line item — auto-fill name, price, unit
+    const selectProductForItem = async (index: number, product: Product) => {
+        const price = await fetchProductPrice(product.id);
+        const items = [...form.line_items];
+        items[index] = {
+            ...items[index],
+            item_name: product.name,
+            product_id: product.id,
+            estimated_unit_price: price,
+            unit: product.unit || "pcs",
+        };
+        setForm({ ...form, line_items: items });
+        setProductSearchIdx(null);
+        setProductQuery("");
+        if (price > 0) {
+            toast.success(`Price auto-filled: $${price.toLocaleString()} per ${product.unit || 'unit'}`);
+        } else {
+            toast.info(`No supplier price found for ${product.name}. Enter estimated price manually.`);
+        }
+    };
+
+    // Filter products based on search query
+    const filteredProducts = productQuery
+        ? products.filter(p =>
+            p.name.toLowerCase().includes(productQuery.toLowerCase()) ||
+            p.sku.toLowerCase().includes(productQuery.toLowerCase()) ||
+            (p.category && p.category.toLowerCase().includes(productQuery.toLowerCase()))
+        ).slice(0, 8)
+        : products.slice(0, 8);
 
     const filteredPRs = prs.filter(pr => {
         const matchesSearch = !search || pr.title.toLowerCase().includes(search.toLowerCase()) ||
@@ -133,8 +197,9 @@ export default function RequisitionsPage() {
                 line_items: [{ item_name: "", quantity: 1, estimated_unit_price: 0, unit: "pcs", product_id: "" }],
             });
             await loadData();
+            toast.success("Purchase requisition created!");
         } catch (e: any) {
-            alert(e.message || "Failed to create PR");
+            toast.error(e.message || "Failed to create requisition. Check if the server is running.");
         } finally {
             setCreating(false);
         }
@@ -151,11 +216,29 @@ export default function RequisitionsPage() {
                 setShowReject(false);
                 setRejectReason("");
             }
-            else if (action === "convert") await convertPRtoPO(prId, token);
+            else if (action === "convert") {
+                // Open supplier picker instead of auto-converting
+                const pr = prs.find(p => p.id === prId) || selectedPR;
+                if (pr) {
+                    setConvertingPR(pr);
+                    setSelectedSupplierId(pr.preferred_supplier_id || "");
+                    setShowSupplierPicker(true);
+                    setSelectedPR(null);
+                    // Fetch supplier coverage data
+                    setCoverageLoading(true);
+                    try {
+                        const cov = await getSupplierCoverage(pr.id);
+                        setCoverageData(cov.suppliers || []);
+                    } catch { setCoverageData([]); }
+                    finally { setCoverageLoading(false); }
+                }
+                return;
+            }
             await loadData();
             setSelectedPR(null);
+            toast.success(`${action.charAt(0).toUpperCase() + action.slice(1)} successful!`);
         } catch (e: any) {
-            alert(e.message || `Failed to ${action}`);
+            toast.error(e.message || `Failed to ${action}`);
         } finally {
             setActionLoading("");
         }
@@ -337,8 +420,25 @@ export default function RequisitionsPage() {
                         <div className="grid grid-cols-2 gap-4">
                             <div className="grid gap-2">
                                 <Label>Department</Label>
-                                <Input value={form.department} onChange={e => setForm({ ...form, department: e.target.value })}
-                                    placeholder="e.g. IT, Operations" />
+                                <Select value={form.department} onValueChange={v => setForm({ ...form, department: v })}>
+                                    <SelectTrigger>
+                                        <SelectValue placeholder="Select department" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {departments.length > 0 ? departments.map(d => (
+                                            <SelectItem key={d.id} value={d.name}>{d.name}</SelectItem>
+                                        )) : (
+                                            <>
+                                                <SelectItem value="IT">IT</SelectItem>
+                                                <SelectItem value="Operations">Operations</SelectItem>
+                                                <SelectItem value="Marketing">Marketing</SelectItem>
+                                                <SelectItem value="Finance">Finance</SelectItem>
+                                                <SelectItem value="HR">HR</SelectItem>
+                                                <SelectItem value="Engineering">Engineering</SelectItem>
+                                            </>
+                                        )}
+                                    </SelectContent>
+                                </Select>
                             </div>
                             <div className="grid gap-2">
                                 <Label>Needed By</Label>
@@ -431,33 +531,90 @@ export default function RequisitionsPage() {
                             </div>
                             <div className="space-y-3">
                                 {form.line_items.map((li: any, idx: number) => (
-                                    <div key={idx} className="flex gap-2 items-end p-3 rounded-lg border bg-muted/20">
-                                        <div className="grid gap-1 flex-1">
-                                            <Label className="text-xs">Item Name</Label>
-                                            <Input value={li.item_name}
-                                                onChange={e => updateLineItem(idx, "item_name", e.target.value)}
-                                                placeholder="Item name" />
+                                    <div key={idx} className="p-3 rounded-lg border bg-muted/20 space-y-2">
+                                        <div className="flex gap-2 items-end">
+                                            {/* ── Product Picker ── */}
+                                            <div className="grid gap-1 flex-1 relative">
+                                                <Label className="text-xs flex items-center gap-1">
+                                                    <Package className="h-3 w-3" /> Product
+                                                </Label>
+                                                <div className="relative">
+                                                    <Input
+                                                        value={productSearchIdx === idx ? productQuery : li.item_name}
+                                                        onChange={e => {
+                                                            setProductSearchIdx(idx);
+                                                            setProductQuery(e.target.value);
+                                                            updateLineItem(idx, "item_name", e.target.value);
+                                                            updateLineItem(idx, "product_id", "");
+                                                        }}
+                                                        onFocus={() => {
+                                                            setProductSearchIdx(idx);
+                                                            setProductQuery(li.item_name || "");
+                                                        }}
+                                                        onBlur={() => {
+                                                            // Delay to allow click on dropdown item
+                                                            setTimeout(() => setProductSearchIdx(null), 200);
+                                                        }}
+                                                        placeholder="Search product or type name..."
+                                                        className="pr-8"
+                                                    />
+                                                    <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                                                </div>
+                                                {/* Product dropdown */}
+                                                {productSearchIdx === idx && (
+                                                    <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-popover border rounded-md shadow-lg max-h-48 overflow-y-auto">
+                                                        {filteredProducts.length > 0 ? (
+                                                            filteredProducts.map(product => (
+                                                                <button
+                                                                    key={product.id}
+                                                                    type="button"
+                                                                    className="w-full text-left px-3 py-2 hover:bg-muted/50 flex items-center justify-between text-sm transition-colors"
+                                                                    onMouseDown={e => e.preventDefault()}
+                                                                    onClick={() => selectProductForItem(idx, product)}
+                                                                >
+                                                                    <div>
+                                                                        <p className="font-medium">{product.name}</p>
+                                                                        <p className="text-xs text-muted-foreground">{product.sku} · {product.category}</p>
+                                                                    </div>
+                                                                    <span className="text-xs text-muted-foreground">{product.unit}</span>
+                                                                </button>
+                                                            ))
+                                                        ) : (
+                                                            <div className="px-3 py-3 text-sm text-muted-foreground text-center">
+                                                                No products found — type a custom item name
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="grid gap-1 w-20">
+                                                <Label className="text-xs">Qty</Label>
+                                                <Input type="number" value={li.quantity}
+                                                    onChange={e => updateLineItem(idx, "quantity", parseInt(e.target.value) || 1)} />
+                                            </div>
+                                            <div className="grid gap-1 w-28">
+                                                <Label className="text-xs">Est. Price</Label>
+                                                <Input type="number" value={li.estimated_unit_price}
+                                                    onChange={e => updateLineItem(idx, "estimated_unit_price", parseFloat(e.target.value) || 0)}
+                                                    className={li.product_id && li.estimated_unit_price > 0 ? "border-emerald-500/50" : ""}
+                                                />
+                                            </div>
+                                            <div className="text-right w-24 pb-1">
+                                                <p className="text-sm font-mono font-semibold">
+                                                    ${(li.quantity * li.estimated_unit_price).toLocaleString()}
+                                                </p>
+                                            </div>
+                                            {form.line_items.length > 1 && (
+                                                <Button variant="ghost" size="icon" className="text-red-400"
+                                                    onClick={() => removeLineItem(idx)}>
+                                                    <Trash2 className="h-4 w-4" />
+                                                </Button>
+                                            )}
                                         </div>
-                                        <div className="grid gap-1 w-20">
-                                            <Label className="text-xs">Qty</Label>
-                                            <Input type="number" value={li.quantity}
-                                                onChange={e => updateLineItem(idx, "quantity", parseInt(e.target.value) || 1)} />
-                                        </div>
-                                        <div className="grid gap-1 w-28">
-                                            <Label className="text-xs">Unit Price</Label>
-                                            <Input type="number" value={li.estimated_unit_price}
-                                                onChange={e => updateLineItem(idx, "estimated_unit_price", parseFloat(e.target.value) || 0)} />
-                                        </div>
-                                        <div className="text-right w-24 pb-1">
-                                            <p className="text-sm font-mono font-semibold">
-                                                ${(li.quantity * li.estimated_unit_price).toLocaleString()}
+                                        {li.product_id && li.estimated_unit_price > 0 && (
+                                            <p className="text-[10px] text-emerald-400 flex items-center gap-1">
+                                                <CheckCircle className="h-3 w-3" /> Price auto-filled from supplier catalog
                                             </p>
-                                        </div>
-                                        {form.line_items.length > 1 && (
-                                            <Button variant="ghost" size="icon" className="text-red-400"
-                                                onClick={() => removeLineItem(idx)}>
-                                                <Trash2 className="h-4 w-4" />
-                                            </Button>
                                         )}
                                     </div>
                                 ))}
@@ -611,6 +768,174 @@ export default function RequisitionsPage() {
                             disabled={!!actionLoading}>
                             {actionLoading.startsWith("reject") && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                             Reject
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* ─── Supplier Selection Dialog for PR→PO ─────────────────── */}
+            <Dialog open={showSupplierPicker} onOpenChange={(open) => {
+                if (!open) { setShowSupplierPicker(false); setConvertingPR(null); }
+            }}>
+                <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <ArrowUpRight className="h-5 w-5 text-purple-400" />
+                            Select Supplier for PO
+                        </DialogTitle>
+                        <DialogDescription>
+                            Choose which supplier to create the Purchase Order with.
+                            {convertingPR && (
+                                <span className="block mt-1 font-medium text-foreground">
+                                    {convertingPR.pr_number}: {convertingPR.title}
+                                </span>
+                            )}
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    {/* Items summary */}
+                    {convertingPR && convertingPR.line_items.length > 0 && (
+                        <div className="rounded-lg border bg-muted/20 p-3">
+                            <p className="text-xs text-muted-foreground mb-2 font-semibold">Items in this request:</p>
+                            {convertingPR.line_items.map((li, i) => (
+                                <div key={i} className="flex justify-between text-sm py-1">
+                                    <span>{li.item_name} × {li.quantity}</span>
+                                    <span className="font-mono text-muted-foreground">
+                                        ${(li.estimated_total || li.quantity * li.estimated_unit_price).toLocaleString()}
+                                    </span>
+                                </div>
+                            ))}
+                            <Separator className="my-2" />
+                            <div className="flex justify-between text-sm font-semibold">
+                                <span>Estimated Total</span>
+                                <span className="font-mono">${convertingPR.estimated_total.toLocaleString()}</span>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Supplier list */}
+                    <div className="space-y-2">
+                        <Label className="text-sm font-semibold">Available Suppliers</Label>
+                        {coverageLoading ? (
+                            <div className="flex items-center justify-center py-6">
+                                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                                <span className="ml-2 text-sm text-muted-foreground">Checking product availability...</span>
+                            </div>
+                        ) : suppliers.filter(s => s.status === "active").length === 0 ? (
+                            <p className="text-sm text-muted-foreground py-4 text-center">
+                                No active suppliers found. Create a supplier first.
+                            </p>
+                        ) : (
+                            suppliers.filter(s => s.status === "active").map(supplier => {
+                                const isAISuggested = convertingPR?.preferred_supplier_id === supplier.id;
+                                const isSelected = selectedSupplierId === supplier.id;
+                                const cov = coverageData.find(c => c.supplier_id === supplier.id);
+                                const hasNone = cov?.has_none || false;
+                                const hasAll = cov?.has_all || false;
+                                const matched = cov?.products_matched ?? 0;
+                                const total = cov?.products_total ?? 0;
+
+                                return (
+                                    <button
+                                        key={supplier.id}
+                                        type="button"
+                                        onClick={() => !hasNone && setSelectedSupplierId(supplier.id)}
+                                        disabled={hasNone}
+                                        className={cn(
+                                            "w-full text-left p-3 rounded-lg border transition-all",
+                                            hasNone
+                                                ? "border-red-500/20 bg-red-500/5 opacity-60 cursor-not-allowed"
+                                                : isSelected
+                                                    ? "border-purple-500 bg-purple-500/10 ring-1 ring-purple-500/30"
+                                                    : "border-border/50 hover:border-border hover:bg-muted/30"
+                                        )}
+                                    >
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <div className={cn(
+                                                    "w-4 h-4 rounded-full border-2 flex items-center justify-center",
+                                                    hasNone ? "border-red-400/30" :
+                                                        isSelected ? "border-purple-500" : "border-muted-foreground/30"
+                                                )}>
+                                                    {isSelected && !hasNone && <div className="w-2 h-2 rounded-full bg-purple-500" />}
+                                                    {hasNone && <XCircle className="h-3 w-3 text-red-400" />}
+                                                </div>
+                                                <span className="font-medium">{supplier.name}</span>
+                                            </div>
+                                            <div className="flex items-center gap-1.5">
+                                                {isAISuggested && !hasNone && (
+                                                    <Badge className="text-[10px] bg-purple-500/15 text-purple-400 border-purple-500/30">
+                                                        <Sparkles className="h-2.5 w-2.5 mr-0.5" /> AI Pick
+                                                    </Badge>
+                                                )}
+                                                {total > 0 && (
+                                                    <Badge variant="outline" className={cn(
+                                                        "text-[10px]",
+                                                        hasAll ? "text-emerald-400 border-emerald-500/30" :
+                                                            hasNone ? "text-red-400 border-red-500/30" :
+                                                                "text-amber-400 border-amber-500/30"
+                                                    )}>
+                                                        {hasAll ? "✅" : hasNone ? "❌" : "⚠️"} {matched}/{total} products
+                                                    </Badge>
+                                                )}
+                                                <Badge variant="outline" className="text-[10px]">
+                                                    ★ {supplier.rating.toFixed(1)}
+                                                </Badge>
+                                            </div>
+                                        </div>
+                                        <div className="mt-1.5 ml-6 flex gap-4 text-xs text-muted-foreground">
+                                            {hasNone && <span className="text-red-400">No matching products in catalog</span>}
+                                            {!hasNone && supplier.email && <span>{supplier.email}</span>}
+                                        </div>
+                                    </button>
+                                );
+                            })
+                        )}
+                    </div>
+
+                    <p className="text-xs text-muted-foreground">
+                        💡 The PO will use the selected supplier's catalog prices when available.
+                        Suppliers with ❌ 0 products cannot be selected.
+                    </p>
+
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => {
+                            setShowSupplierPicker(false);
+                            setConvertingPR(null);
+                        }}>Cancel</Button>
+                        <Button
+                            disabled={!selectedSupplierId || converting}
+                            className="bg-purple-600 hover:bg-purple-700"
+                            onClick={async () => {
+                                if (!convertingPR || !selectedSupplierId) return;
+                                setConverting(true);
+                                try {
+                                    const token = await getToken();
+                                    const result = await convertPRtoPO(
+                                        convertingPR.id,
+                                        token,
+                                        { supplier_id: selectedSupplierId }
+                                    );
+                                    toast.success(
+                                        `${result.po_number} created with ${result.supplier_name || 'selected supplier'}! Total: $${(result.total_amount || 0).toLocaleString()}`,
+                                    );
+                                    // Show catalog warning if any
+                                    if ((result as any).catalog_warning) {
+                                        toast.warning((result as any).catalog_warning);
+                                    }
+                                    setShowSupplierPicker(false);
+                                    setConvertingPR(null);
+                                    setSelectedSupplierId("");
+                                    await loadData();
+                                } catch (e: any) {
+                                    toast.error(e.message || "Failed to convert PR to PO");
+                                } finally {
+                                    setConverting(false);
+                                }
+                            }}
+                        >
+                            {converting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            <ArrowUpRight className="h-4 w-4 mr-1" /> Create Purchase Order
                         </Button>
                     </DialogFooter>
                 </DialogContent>

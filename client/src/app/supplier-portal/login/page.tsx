@@ -115,7 +115,16 @@ export default function SupplierLoginPage() {
                             </Button>
                         </form>
 
-                        <div className="mt-6 text-center">
+                        <div className="text-center">
+                            <a
+                                href="/supplier-portal/reset-password"
+                                className="text-sm text-gray-400 hover:text-violet-400 hover:underline"
+                            >
+                                Forgot your password?
+                            </a>
+                        </div>
+
+                        <div className="mt-2 text-center">
                             <p className="text-sm text-gray-500">
                                 First time?{" "}
                                 <a

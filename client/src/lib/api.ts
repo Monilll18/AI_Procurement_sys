@@ -154,7 +154,7 @@ export const deleteSupplier = (id: string, token: string) =>
     apiFetch<null>(`/api/suppliers/${id}`, { method: "DELETE" }, token);
 
 export const resendSupplierInvite = (supplierId: string, token: string) =>
-    apiFetch<{ message: string; portal_credentials: PortalCredentials }>(`/api/suppliers/${supplierId}/invite`, { method: "POST" }, token);
+    apiFetch<{ message: string; portal_credentials?: PortalCredentials; action?: string; reset_url?: string; token?: string; email_sent?: boolean }>(`/api/suppliers/${supplierId}/invite`, { method: "POST" }, token);
 
 // Inventory
 export const getInventory = () => apiFetch<InventoryItem[]>("/api/inventory/");
@@ -657,11 +657,29 @@ export const approveRequisition = (id: string, token?: string | null) =>
 export const rejectRequisition = (id: string, reason?: string, token?: string | null) =>
     apiFetch<{ message: string }>(`/api/requisitions/${id}/reject?reason=${encodeURIComponent(reason || '')}`, { method: "POST" }, token);
 
-export const convertPRtoPO = (id: string, token?: string | null) =>
-    apiFetch<{ message: string; po_id: string; po_number: string }>(`/api/requisitions/${id}/convert-to-po`, { method: "POST" }, token);
+export const convertPRtoPO = (id: string, token?: string | null, data?: { supplier_id?: string; line_item_prices?: Record<string, number>; notes?: string }) =>
+    apiFetch<{ message: string; po_id: string; po_number: string; supplier_name?: string; total_amount?: number }>(
+        `/api/requisitions/${id}/convert-to-po`,
+        { method: "POST", ...(data ? { body: JSON.stringify(data) } : {}) },
+        token
+    );
 
 export const getRequisitionStats = () =>
     apiFetch<{ total: number; by_status: Record<string, number>; pending_review: number }>("/api/requisitions/stats/summary");
+
+export interface SupplierCoverageItem {
+    supplier_id: string;
+    supplier_name: string;
+    products_matched: number;
+    products_total: number;
+    has_all: boolean;
+    has_none: boolean;
+}
+
+export const getSupplierCoverage = (prId: string) =>
+    apiFetch<{ pr_id: string; total_products: number; suppliers: SupplierCoverageItem[] }>(
+        `/api/requisitions/${prId}/supplier-coverage`
+    );
 
 // ─── AI / LLM ───────────────────────────────────────────────────
 

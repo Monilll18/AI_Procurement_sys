@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from uuid import UUID
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.database import get_db
 from app.models.supplier import Supplier
@@ -201,10 +201,34 @@ async def send_portal_invite(
     if not supplier.email:
         raise HTTPException(status_code=400, detail="Supplier has no email address")
 
-    # Check if already invited
+    # Check if already has active account → offer password reset instead of error
     existing_user = db.query(SupplierUser).filter(SupplierUser.email == supplier.email.lower().strip()).first()
     if existing_user and not existing_user.must_change_password:
-        raise HTTPException(status_code=400, detail="Supplier already has an active portal account")
+        import secrets
+        from datetime import timedelta
+
+        token = secrets.token_urlsafe(48)
+        existing_user.reset_token = token
+        existing_user.reset_token_expires = datetime.now(timezone.utc) + timedelta(hours=1)
+        db.commit()
+
+        reset_url = f"/supplier-portal/reset-password?token={token}"
+
+        # Send reset email to supplier
+        from app.services.email_service import send_password_reset_email
+        email_sent = send_password_reset_email(
+            supplier_email=existing_user.email,
+            supplier_name=existing_user.full_name or supplier.name,
+            reset_url=reset_url,
+        )
+
+        return {
+            "message": "Supplier already has an account. A password reset link has been " + ("emailed to them." if email_sent else "generated."),
+            "action": "password_reset",
+            "reset_url": reset_url,
+            "token": token,
+            "email_sent": email_sent,
+        }
 
     # Delete old pending invitations
     db.query(SupplierInvitation).filter(

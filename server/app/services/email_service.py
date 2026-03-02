@@ -300,3 +300,35 @@ def send_goods_received(
         cta_link=f"{app_url}/inventory",
     )
     return send_email(requester_email, f"📦 Goods Received: {po_number}", html)
+
+
+def send_password_reset_email(
+    supplier_email: str,
+    supplier_name: str,
+    reset_url: str,
+    app_url: str = "http://localhost:3000",
+) -> bool:
+    """Send password reset email to supplier."""
+    full_url = f"{app_url}{reset_url}"
+    body = f"""
+    <p style="color: #374151; font-size: 15px;">Hello <strong>{supplier_name}</strong>,</p>
+    <p style="color: #374151; font-size: 15px;">
+        We received a request to reset your Supplier Portal password.
+    </p>
+    <p style="color: #374151; font-size: 15px;">
+        Click the button below to set a new password. This link is valid for <strong>1 hour</strong>.
+    </p>
+    <div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px 16px; margin: 16px 0;">
+        <p style="color: #92400e; font-size: 13px; margin: 0;">
+            ⚠️ If you did not request this reset, you can safely ignore this email.
+        </p>
+    </div>
+    """
+    html = _base_template(
+        title="Password Reset Request",
+        body=body,
+        cta_text="Reset Password",
+        cta_link=full_url,
+    )
+    return send_email(supplier_email, "🔑 Reset Your Supplier Portal Password", html)
+

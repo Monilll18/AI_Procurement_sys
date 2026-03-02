@@ -36,6 +36,10 @@ class SupplierUser(Base):
     last_login_at = Column(DateTime(timezone=True), nullable=True)
     invited_by = Column(String(255), nullable=True)  # Clerk user ID who created this
 
+    # Password reset
+    reset_token = Column(String(255), unique=True, nullable=True, index=True)
+    reset_token_expires = Column(DateTime(timezone=True), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

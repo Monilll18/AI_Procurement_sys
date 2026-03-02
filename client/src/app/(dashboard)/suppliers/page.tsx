@@ -19,6 +19,7 @@ import {
     Upload, FileText, CheckCircle, AlertTriangle, X, DollarSign, Clock,
     Trash2, ExternalLink, Copy, RefreshCw, KeyRound,
 } from "lucide-react";
+import { toast } from "sonner";
 import { ConfirmModal } from "@/components/ConfirmModal";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -422,9 +423,25 @@ export default function SuppliersPage() {
                                                 try {
                                                     const token = await getToken() || "";
                                                     const res = await resendSupplierInvite(viewSupplier.id, token);
-                                                    setCredentials(res.portal_credentials);
+                                                    if (res.action === "password_reset") {
+                                                        // Supplier already has account — show reset link
+                                                        const fullUrl = `${window.location.origin}${res.reset_url}`;
+                                                        toast.success("Password reset link generated", {
+                                                            description: "Supplier already has an account. Share the reset link with them.",
+                                                            duration: 10000,
+                                                            action: {
+                                                                label: "Copy Link",
+                                                                onClick: () => {
+                                                                    navigator.clipboard.writeText(fullUrl);
+                                                                    toast.info("Reset link copied to clipboard");
+                                                                },
+                                                            },
+                                                        });
+                                                    } else {
+                                                        setCredentials(res.portal_credentials || null);
+                                                    }
                                                 } catch (err: any) {
-                                                    alert(err.message || "Failed to resend invite");
+                                                    toast.error(err.message || "Failed to resend invite");
                                                 } finally {
                                                     setResending(false);
                                                 }

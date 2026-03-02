@@ -389,13 +389,28 @@ async def reject_requisition(
     return {"message": "Requisition rejected", "pr_number": pr.pr_number}
 
 
+class ConvertToPORequest(BaseModel):
+    """Optional request body for PR → PO conversion.
+    Allows buyer to choose supplier and override prices."""
+    supplier_id: Optional[str] = None
+    line_item_prices: Optional[dict] = None  # { product_id_or_item_name: unit_price }
+    notes: Optional[str] = None
+
+
 @router.post("/{pr_id}/convert-to-po")
 async def convert_to_po(
     pr_id: str,
+    body: Optional[ConvertToPORequest] = None,
     db: Session = Depends(get_db),
     user: dict = Depends(require_role("admin", "manager")),
 ):
-    """Convert an approved PR into a Purchase Order. Requires Manager/Admin role."""
+    """Convert an approved PR into a Purchase Order. Requires Manager/Admin role.
+    
+    Accepts optional body with:
+    - supplier_id: manually chosen supplier (overrides AI suggestion)
+    - line_item_prices: { product_id: unit_price } to override estimated prices
+    - notes: additional PO notes
+    """
     pr = (
         db.query(PurchaseRequisition)
         .options(joinedload(PurchaseRequisition.line_items))
@@ -407,17 +422,88 @@ async def convert_to_po(
     if pr.status != PRStatus.approved:
         raise HTTPException(status_code=400, detail="Only approved PRs can be converted to POs")
 
-    # Handle missing supplier — use preferred or pick first available
-    supplier_id = pr.preferred_supplier_id
+    # Supplier selection priority:
+    # 1. Buyer's manual choice (from request body)
+    # 2. PR preferred supplier (AI suggestion)
+    # 3. Fallback to first available
+    supplier_id = None
+    if body and body.supplier_id:
+        supplier_id = body.supplier_id
+    elif pr.preferred_supplier_id:
+        supplier_id = pr.preferred_supplier_id
+    
     if not supplier_id:
-        from app.models.supplier import Supplier
-        first_supplier = db.query(Supplier).first()
+        first_supplier = db.query(Supplier).filter(Supplier.status == "active").first()
         if not first_supplier:
             raise HTTPException(
                 status_code=400,
-                detail="No suppliers exist. Please create a supplier first.",
+                detail="No active suppliers exist. Please create a supplier first.",
             )
         supplier_id = first_supplier.id
+
+    # Verify supplier exists and is active
+    supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Selected supplier not found")
+
+    # ─── Catalog Validation ─────────────────────────────────────────
+    # First, resolve product IDs for ALL line items (even manually typed ones)
+    resolved_items = []  # List of (line_item, resolved_product_id)
+    for li in pr.line_items:
+        product_id = li.product_id
+        if not product_id and li.item_name:
+            # Try to find product by name
+            product = db.query(Product).filter(
+                Product.name.ilike(f"%{li.item_name}%")
+            ).first()
+            if product:
+                product_id = product.id
+        resolved_items.append((li, product_id))
+
+    # Check which resolved products this supplier actually carries
+    resolved_product_ids = [pid for _, pid in resolved_items if pid]
+    catalog_hits = set()
+    if resolved_product_ids:
+        matching_prices = db.query(SupplierPrice.product_id).filter(
+            SupplierPrice.supplier_id == supplier_id,
+            SupplierPrice.product_id.in_(resolved_product_ids),
+            SupplierPrice.is_active == True,
+        ).all()
+        catalog_hits = {str(sp.product_id) for sp in matching_prices}
+
+    products_total = len(resolved_items)  # Total line items
+    products_with_id = len(resolved_product_ids)  # Items we could identify
+    products_in_catalog = len(catalog_hits)
+    catalog_warning = None
+
+    if products_with_id > 0 and products_in_catalog == 0:
+        # Supplier has NONE of the identifiable products — block
+        force = (body.notes or "").strip().lower() == "force" if body else False
+        if not force:
+            missing_names = [li.item_name for li, pid in resolved_items if pid and str(pid) not in catalog_hits]
+            if not missing_names:
+                missing_names = [li.item_name for li, _ in resolved_items if li.item_name]
+            raise HTTPException(
+                status_code=400,
+                detail=f"{supplier.name} does not carry any of the requested products "
+                       f"({', '.join(missing_names[:3])}). Choose a different supplier or "
+                       f"add these products to their catalog first.",
+            )
+    elif products_with_id > 0 and products_in_catalog < products_with_id:
+        missing_names = [li.item_name for li, pid in resolved_items if pid and str(pid) not in catalog_hits]
+        catalog_warning = (
+            f"Warning: {supplier.name} is missing {products_with_id - products_in_catalog} of "
+            f"{products_with_id} products in their catalog ({', '.join(missing_names[:3])}). "
+            f"PR estimated prices will be used for missing items."
+        )
+    elif products_with_id == 0 and products_total > 0:
+        catalog_warning = (
+            f"Warning: None of the {products_total} items could be matched to products in the system. "
+            f"Using PR estimated prices."
+        )
+
+    # Build price lookup from body overrides
+    price_overrides = (body.line_item_prices or {}) if body else {}
 
     # Generate PO number
     year = datetime.utcnow().year
@@ -427,47 +513,63 @@ async def convert_to_po(
     po_number = f"PO-{year}-{str(po_count + 1).zfill(4)}"
 
     # Create PO from PR
+    extra_notes = (body.notes or "") if body else ""
     po = PurchaseOrder(
         po_number=po_number,
         supplier_id=supplier_id,
         created_by=user["clerk_id"],
         status=POStatus.draft,
-        total_amount=pr.estimated_total,
+        total_amount=0,  # Will be calculated from line items
         expected_delivery=pr.needed_by,
-        notes=f"Auto-generated from {pr.pr_number}. {pr.notes or ''}",
+        notes=f"From {pr.pr_number}. {extra_notes} {pr.notes or ''}".strip(),
     )
 
-    # Convert line items — handle missing product_ids
-    for li in pr.line_items:
-        product_id = li.product_id
-        if not product_id:
-            # Try to find product by name
-            from app.models.product import Product
-            product = db.query(Product).filter(
-                Product.name.ilike(f"%{li.item_name}%")
+    # Convert line items — use resolved product IDs and buyer's price overrides
+    total = 0
+    for li, resolved_pid in resolved_items:
+        product_id = resolved_pid
+        # If still no product_id, create auto product
+        if not product_id and li.item_name:
+            product = Product(
+                sku=f"AUTO-{li.item_name[:20].upper().replace(' ', '-')}",
+                name=li.item_name or "Unnamed Item",
+                category=pr.category or "General",
+                unit=li.unit or "pcs",
+            )
+            db.add(product)
+            db.flush()
+            product_id = product.id
+        elif not product_id:
+            # Skip items with no name and no product_id
+            continue
+
+        # Price priority: buyer override > supplier catalog > PR estimate
+        unit_price = li.estimated_unit_price or 0
+        pid_str = str(product_id) if product_id else ""
+        if pid_str in price_overrides:
+            unit_price = float(price_overrides[pid_str])
+        elif product_id:
+            # Try to get supplier's actual price for this product
+            sp = db.query(SupplierPrice).filter(
+                SupplierPrice.product_id == product_id,
+                SupplierPrice.supplier_id == supplier_id,
+                SupplierPrice.is_active == True,
             ).first()
-            if product:
-                product_id = product.id
-            else:
-                # Create a generic product for this line item
-                product = Product(
-                    sku=f"AUTO-{li.item_name[:20].upper().replace(' ', '-')}",
-                    name=li.item_name or "Unnamed Item",
-                    category=pr.category or "General",
-                    unit=li.unit or "pcs",
-                )
-                db.add(product)
-                db.flush()  # Get the ID
-                product_id = product.id
+            if sp:
+                unit_price = sp.unit_price
+
+        line_total = li.quantity * unit_price
+        total += line_total
 
         po_line = POLineItem(
             product_id=product_id,
             quantity=li.quantity,
-            unit_price=li.estimated_unit_price,
-            total_price=li.quantity * li.estimated_unit_price,
+            unit_price=unit_price,
+            total_price=line_total,
         )
         po.line_items.append(po_line)
 
+    po.total_amount = total
     db.add(po)
 
     # Update PR
@@ -481,7 +583,71 @@ async def convert_to_po(
         "message": f"{pr.pr_number} converted to {po.po_number}",
         "po_id": str(po.id),
         "po_number": po.po_number,
+        "supplier_name": supplier.name,
+        "total_amount": total,
+        "catalog_warning": catalog_warning,
     }
+
+
+@router.get("/{pr_id}/supplier-coverage")
+async def get_supplier_coverage(
+    pr_id: str,
+    db: Session = Depends(get_db),
+):
+    """For a given PR, return how many of its products each supplier carries.
+    Used by the frontend supplier picker to show product availability."""
+    pr = (
+        db.query(PurchaseRequisition)
+        .options(joinedload(PurchaseRequisition.line_items))
+        .filter(PurchaseRequisition.id == pr_id)
+        .first()
+    )
+    if not pr:
+        raise HTTPException(status_code=404, detail="Requisition not found")
+
+    # Resolve product IDs — same logic as convert_to_po
+    product_ids = []
+    for li in pr.line_items:
+        pid = li.product_id
+        if not pid and li.item_name:
+            product = db.query(Product).filter(
+                Product.name.ilike(f"%{li.item_name}%")
+            ).first()
+            if product:
+                pid = product.id
+        if pid:
+            product_ids.append(pid)
+
+    total_products = len(product_ids)
+
+    # Get all active suppliers
+    active_suppliers = db.query(Supplier).filter(Supplier.status == "active").all()
+
+    coverage = []
+    for supplier in active_suppliers:
+        if total_products > 0:
+            matching = db.query(SupplierPrice.product_id).filter(
+                SupplierPrice.supplier_id == supplier.id,
+                SupplierPrice.product_id.in_(product_ids),
+                SupplierPrice.is_active == True,
+            ).all()
+            matched = len({str(sp.product_id) for sp in matching})
+        else:
+            matched = 0
+
+        coverage.append({
+            "supplier_id": str(supplier.id),
+            "supplier_name": supplier.name,
+            "products_matched": matched,
+            "products_total": total_products,
+            "has_all": matched == total_products and total_products > 0,
+            "has_none": matched == 0 and total_products > 0,
+        })
+
+    # Sort: suppliers with most coverage first
+    coverage.sort(key=lambda c: c["products_matched"], reverse=True)
+
+    return {"pr_id": pr_id, "total_products": total_products, "suppliers": coverage}
 
 
 @router.get("/stats/summary")

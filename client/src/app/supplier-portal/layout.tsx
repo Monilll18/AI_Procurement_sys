@@ -32,7 +32,7 @@ export default function SupplierPortalLayout({ children }: { children: ReactNode
     useEffect(() => {
         // Allow login and activate pages without auth
         const isPublicPage =
-            pathname.includes("/login") || pathname.includes("/activate");
+            pathname.includes("/login") || pathname.includes("/activate") || pathname.includes("/reset-password");
 
         const stored = getStoredSupplierUser();
         if (!stored && !isPublicPage) {
@@ -45,7 +45,7 @@ export default function SupplierPortalLayout({ children }: { children: ReactNode
 
     // Public pages (login, activate) skip the sidebar layout
     const isPublicPage =
-        pathname.includes("/login") || pathname.includes("/activate");
+        pathname.includes("/login") || pathname.includes("/activate") || pathname.includes("/reset-password");
 
     if (isPublicPage) {
         return <>{children}</>;

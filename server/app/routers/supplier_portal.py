@@ -161,12 +161,46 @@ async def accept_po(
     db: Session = Depends(get_db),
 ):
     po = _get_and_validate_po(po_id, supplier_user["supplier_id"], db)
+
+    # ─── Catalog validation: warn if supplier doesn't carry some products ───
+    po_with_items = db.query(PurchaseOrder).options(
+        joinedload(PurchaseOrder.line_items)
+    ).filter(PurchaseOrder.id == po_id).first()
+
+    catalog_warning = None
+    if po_with_items and po_with_items.line_items:
+        product_ids = [li.product_id for li in po_with_items.line_items if li.product_id]
+        if product_ids:
+            matching = db.query(SupplierPrice.product_id).filter(
+                SupplierPrice.supplier_id == supplier_user["supplier_id"],
+                SupplierPrice.product_id.in_(product_ids),
+                SupplierPrice.is_active == True,
+            ).all()
+            catalog_product_ids = {str(sp.product_id) for sp in matching}
+            missing_ids = [pid for pid in product_ids if str(pid) not in catalog_product_ids]
+
+            if missing_ids:
+                # Get product names for the warning
+                missing_products = db.query(Product.name).filter(
+                    Product.id.in_(missing_ids)
+                ).all()
+                missing_names = [p.name for p in missing_products]
+                catalog_warning = (
+                    f"Your catalog is missing {len(missing_ids)} product(s): "
+                    f"{', '.join(missing_names[:5])}. "
+                    f"Please update your catalog to ensure accurate pricing."
+                )
+
     old_status = po.status.value
     po.status = POStatus.approved
     if data.notes:
         po.notes = (po.notes or "") + f"\n[Supplier] {data.notes}"
     db.commit()
-    return {"message": f"PO {po.po_number} accepted", "old_status": old_status, "new_status": "approved"}
+
+    result = {"message": f"PO {po.po_number} accepted", "old_status": old_status, "new_status": "approved"}
+    if catalog_warning:
+        result["catalog_warning"] = catalog_warning
+    return result
 
 
 # ─── Reject PO ────────────────────────────────────────────────
