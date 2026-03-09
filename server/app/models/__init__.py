@@ -15,6 +15,7 @@ from app.models.department import Department
 from app.models.approval_rule import ApprovalRule
 from app.models.purchase_requisition import PurchaseRequisition, PRLineItem
 from app.models.stock_movement import StockMovement
+from app.models.tracking import Carrier, TrackingCheckpoint
 
 __all__ = [
     "Product",

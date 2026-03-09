@@ -231,20 +231,40 @@ async def partial_accept_po(
 ):
     po = _get_and_validate_po(po_id, supplier_user["supplier_id"], db)
     old_status = po.status.value
-    po.status = POStatus.partially_received
 
     partial_summary = []
     for item in data.items:
         li = db.query(POLineItem).filter(POLineItem.id == item["line_item_id"]).first()
         if li:
+            available_qty = item.get("available_qty", 0)
+            # Validate: cannot deliver more than ordered
+            remaining = li.quantity - li.quantity_received
+            if available_qty > remaining:
+                product_name = li.product.name if li.product else "Unknown"
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot deliver {available_qty} of {product_name}. Only {remaining} remaining (ordered {li.quantity}, already received {li.quantity_received}).",
+                )
+            if available_qty < 0:
+                raise HTTPException(status_code=400, detail="Quantity cannot be negative.")
+            # Update quantity received on line item
+            li.quantity_received += available_qty
             product_name = li.product.name if li.product else "Unknown"
-            partial_summary.append(f"{product_name}: {item['available_qty']}/{li.quantity}")
+            partial_summary.append(f"{product_name}: {available_qty}/{li.quantity}")
+
+    # Determine status: fully received or partially
+    total_ordered = sum(li.quantity for li in po.line_items)
+    total_received = sum(li.quantity_received for li in po.line_items)
+    if total_received >= total_ordered:
+        po.status = POStatus.received
+    else:
+        po.status = POStatus.partially_received
 
     po.notes = (po.notes or "") + f"\n[Supplier PARTIAL] {data.reason or 'Limited stock'}. " + ", ".join(partial_summary)
     if data.notes:
         po.notes += f" Note: {data.notes}"
     db.commit()
-    return {"message": f"PO {po.po_number} partially accepted", "old_status": old_status, "new_status": "partially_received", "partial_items": partial_summary}
+    return {"message": f"PO {po.po_number} partially accepted", "old_status": old_status, "new_status": po.status.value, "partial_items": partial_summary}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -291,15 +311,49 @@ async def create_shipment(
         except ValueError:
             pass
 
+    # Auto-generate tracking number if not provided
+    tracking_number = data.tracking_number
+    tracking_url = data.tracking_url
+    if not tracking_number:
+        import time, random, string
+        carrier_prefixes = {
+            "FedEx": "FDX", "UPS": "UPS", "DHL": "DHL", "USPS": "USP",
+            "BlueDart": "BLD", "Other": "TRK",
+        }
+        prefix = carrier_prefixes.get(data.carrier, "TRK")
+        ts_hex = hex(int(time.time()))[2:].upper()[-6:]
+        rand = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+        tracking_number = f"{prefix}-{ts_hex}-{rand}"
+
+    # Lookup carrier from DB for tracking URL + code
+    from app.models.tracking import Carrier as CarrierModel, TrackingCheckpoint
+    carrier_record = db.query(CarrierModel).filter(
+        CarrierModel.name == data.carrier
+    ).first()
+    if not carrier_record:
+        carrier_record = db.query(CarrierModel).filter(
+            CarrierModel.name.ilike(f"%{data.carrier}%")
+        ).first()
+
+    carrier_code = carrier_record.code if carrier_record else None
+
+    # Auto-generate tracking URL from carrier template
+    if not tracking_url and tracking_number and carrier_record and carrier_record.tracking_url_template:
+        tracking_url = carrier_record.tracking_url_template.replace("{tracking_number}", tracking_number)
+
     shipment = Shipment(
         po_id=po.id,
         shipment_number=_generate_shipment_number(db),
         shipment_type=ShipmentType(data.shipment_type),
         status=ShipmentStatus.dispatched,
         carrier=data.carrier,
-        tracking_number=data.tracking_number,
-        tracking_url=data.tracking_url,
+        carrier_code=carrier_code,
+        tracking_number=tracking_number,
+        tracking_url=tracking_url,
         estimated_delivery=est_delivery,
+        current_location="Origin — Dispatched",
+        last_checkpoint_message=f"Shipment dispatched via {data.carrier or 'carrier'}",
+        last_checkpoint_time=datetime.utcnow(),
         notes=data.notes,
         created_by=supplier_user["id"],
         dispatched_at=datetime.utcnow(),
@@ -316,18 +370,57 @@ async def create_shipment(
         )
         db.add(si)
 
-    # Update PO notes
+    # Create initial "Dispatched" checkpoint
+    initial_checkpoint = TrackingCheckpoint(
+        shipment_id=shipment.id,
+        checkpoint_time=datetime.utcnow(),
+        location="Origin",
+        message=f"Shipment dispatched via {data.carrier or 'carrier'}",
+        status="Dispatched",
+        source="supplier",
+    )
+    db.add(initial_checkpoint)
+
+    # Update PO notes and STATUS
     po.notes = (po.notes or "") + f"\n[SHIPPED] {shipment.shipment_number} via {data.carrier or 'N/A'}"
-    if data.tracking_number:
-        po.notes += f" | Tracking: {data.tracking_number}"
+    if tracking_number:
+        po.notes += f" | Tracking: {tracking_number}"
+
+    # Sync PO status: approved → sent (or partially_received for partial shipments)
+    from app.models.purchase_order import POStatus
+    if po.status in (POStatus.approved, POStatus.sent):
+        if shipment.shipment_type and shipment.shipment_type.value == "partial":
+            po.status = POStatus.partially_received
+        else:
+            po.status = POStatus.sent
 
     db.commit()
     db.refresh(shipment)
+
+    # Register with AfterShip (async, non-blocking)
+    if carrier_code and tracking_number:
+        try:
+            from app.services.tracking_service import trackingmore_create_tracking, is_tracking_configured
+            if is_tracking_configured():
+                result = await trackingmore_create_tracking(
+                    tracking_number=tracking_number,
+                    courier_code=carrier_code,
+                    title=f"{po.po_number}",
+                    order_number=po.po_number,
+                )
+                if result.get("success") and result.get("tracking_id"):
+                    shipment.aftership_id = result["tracking_id"]
+                    db.commit()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"TrackingMore registration failed: {e}")
 
     return {
         "message": f"Shipment {shipment.shipment_number} created",
         "shipment_id": str(shipment.id),
         "shipment_number": shipment.shipment_number,
+        "tracking_number": tracking_number,
+        "tracking_url": tracking_url,
     }
 
 
@@ -411,6 +504,47 @@ async def update_shipment(
         shipment.delivered_at = datetime.utcnow()
         shipment.actual_delivery = date.today()
 
+    # Create tracking checkpoint for status change
+    if data.status and data.status != old_status:
+        from app.models.tracking import TrackingCheckpoint
+        status_messages = {
+            "in_transit": "Shipment is in transit",
+            "out_for_delivery": "Package is out for delivery",
+            "delivered": "Package has been delivered",
+        }
+        cp_message = status_messages.get(data.status, f"Status updated to {data.status}")
+        if data.notes:
+            cp_message += f" — {data.notes}"
+        checkpoint = TrackingCheckpoint(
+            shipment_id=shipment.id,
+            checkpoint_time=datetime.utcnow(),
+            location=data.notes or "",
+            message=cp_message,
+            status=data.status,
+            source="supplier",
+        )
+        db.add(checkpoint)
+        shipment.last_checkpoint_message = cp_message
+        shipment.last_checkpoint_time = datetime.utcnow()
+
+    # Sync PO status when shipment is delivered
+    if data.status == "delivered" and shipment.purchase_order:
+        from app.models.purchase_order import POStatus
+        po = shipment.purchase_order
+        # Check if ALL shipments for this PO are delivered
+        all_shipments = db.query(Shipment).filter(Shipment.po_id == po.id).all()
+        all_delivered = all(s.status.value == "delivered" for s in all_shipments)
+        if all_delivered:
+            po.status = POStatus.received
+        else:
+            po.status = POStatus.partially_received
+
+    if data.status == "in_transit" and shipment.purchase_order:
+        from app.models.purchase_order import POStatus
+        po = shipment.purchase_order
+        if po.status.value in ("approved", "sent"):
+            po.status = POStatus.sent
+
     db.commit()
     db.refresh(shipment)
 
@@ -484,8 +618,12 @@ def _format_shipment(s: Shipment) -> dict:
         "shipment_type": s.shipment_type.value if s.shipment_type else "full",
         "status": s.status.value,
         "carrier": s.carrier,
+        "carrier_code": s.carrier_code,
         "tracking_number": s.tracking_number,
         "tracking_url": s.tracking_url,
+        "current_location": s.current_location,
+        "last_checkpoint_message": s.last_checkpoint_message,
+        "last_checkpoint_time": s.last_checkpoint_time.isoformat() if s.last_checkpoint_time else None,
         "estimated_delivery": str(s.estimated_delivery) if s.estimated_delivery else None,
         "actual_delivery": str(s.actual_delivery) if s.actual_delivery else None,
         "notes": s.notes,

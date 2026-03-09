@@ -362,7 +362,7 @@ async def receive_goods(
 async def send_po_to_supplier(
     po_id: UUID,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_role("admin", "manager", "procurement_officer")),
+    user: dict = Depends(require_role("admin", "manager")),
 ):
     """
     Send the PO to the supplier via email with PDF attachment.
@@ -384,11 +384,22 @@ async def send_po_to_supplier(
     if not po:
         raise HTTPException(status_code=404, detail="Purchase order not found")
 
-    if po.status not in (POStatus.approved, POStatus.draft, POStatus.pending_approval):
-        raise HTTPException(
-            status_code=400,
-            detail=f"PO status is '{po.status.value}' — only approved/draft POs can be sent.",
-        )
+    if po.status != POStatus.approved:
+        if po.status == POStatus.draft:
+            raise HTTPException(
+                status_code=400,
+                detail="This PO is still a draft. Submit it for approval first, then get it approved before sending.",
+            )
+        elif po.status == POStatus.pending_approval:
+            raise HTTPException(
+                status_code=400,
+                detail="This PO is pending approval. An Admin must approve it before it can be sent to the supplier.",
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"PO status is '{po.status.value}' — only approved POs can be sent to supplier.",
+            )
 
     supplier = po.supplier
     if not supplier or not supplier.email:

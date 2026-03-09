@@ -42,9 +42,9 @@ async def list_pending_approvals(
 async def approve_purchase_order(
     po_id: UUID,
     db: Session = Depends(get_db),
-    user: dict = Depends(require_role("admin", "manager", "approver")),
+    user: dict = Depends(require_role("admin")),
 ):
-    """Approve a purchase order. Requires Manager/Admin/Finance role."""
+    """Approve a purchase order. Requires Admin role only (segregation of duties)."""
     po = db.query(PurchaseOrder).filter(PurchaseOrder.id == po_id).first()
     if not po:
         raise HTTPException(status_code=404, detail="Purchase order not found")

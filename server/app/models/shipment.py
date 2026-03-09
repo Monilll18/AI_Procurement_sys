@@ -16,8 +16,12 @@ from app.database import Base
 class ShipmentStatus(str, enum.Enum):
     preparing = "preparing"
     dispatched = "dispatched"
+    info_received = "info_received"
     in_transit = "in_transit"
+    out_for_delivery = "out_for_delivery"
     delivered = "delivered"
+    exception = "exception"
+    expired = "expired"
     cancelled = "cancelled"
 
 
@@ -36,10 +40,15 @@ class Shipment(Base):
     status = Column(Enum(ShipmentStatus), nullable=False, default=ShipmentStatus.preparing)
 
     carrier = Column(String(100), nullable=True)
+    carrier_code = Column(String(50), nullable=True)       # AfterShip carrier slug
     tracking_number = Column(String(255), nullable=True)
     tracking_url = Column(Text, nullable=True)
+    aftership_id = Column(String(100), nullable=True)       # AfterShip tracking ID
     estimated_delivery = Column(Date, nullable=True)
     actual_delivery = Column(Date, nullable=True)
+    current_location = Column(String(255), nullable=True)   # Last known location
+    last_checkpoint_message = Column(Text, nullable=True)
+    last_checkpoint_time = Column(DateTime(timezone=True), nullable=True)
     notes = Column(Text, nullable=True)
 
     created_by = Column(String(255), nullable=True)  # supplier user id
@@ -51,6 +60,7 @@ class Shipment(Base):
     # Relationships
     purchase_order = relationship("PurchaseOrder", backref="shipments")
     items = relationship("ShipmentItem", back_populates="shipment", cascade="all, delete-orphan")
+    checkpoints = relationship("TrackingCheckpoint", back_populates="shipment", cascade="all, delete-orphan", order_by="TrackingCheckpoint.checkpoint_time.desc()")
 
     def __repr__(self):
         return f"<Shipment {self.shipment_number} po={self.po_id} status={self.status}>"

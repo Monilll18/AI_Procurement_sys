@@ -935,3 +935,57 @@ export const simulatePartial = (poId: string, data?: { fulfillment_percent?: num
     apiFetch<{ message: string; response_type: string; ordered_quantity: number; available_quantity: number; fulfillment_percent: number }>(
         `/api/simulator/partial/${poId}`, { method: "POST", body: JSON.stringify(data || {}) }
     );
+
+// ═══════════════════════════════════════════════════════════════
+// Tracking
+// ═══════════════════════════════════════════════════════════════
+
+export interface TrackingCheckpoint {
+    id: string;
+    time: string;
+    location: string;
+    city?: string;
+    state?: string;
+    country?: string;
+    coordinates?: { lat: number; lng: number } | null;
+    message: string;
+    status: string;
+    source: string;
+}
+
+export interface ShipmentTracking {
+    shipment_id: string;
+    shipment_number: string;
+    status: string;
+    carrier: string;
+    carrier_code: string;
+    tracking_number: string;
+    tracking_url: string;
+    current_location: string;
+    last_message: string;
+    estimated_delivery: string | null;
+    dispatched_at: string | null;
+    shipment_type: string;
+    checkpoints: TrackingCheckpoint[];
+    items: { id: string; quantity_shipped: number }[];
+}
+
+export const getPoTracking = (poId: string) =>
+    apiFetch<{ shipments: ShipmentTracking[]; total: number }>(`/api/tracking/po/${poId}`);
+
+export const getShipmentTracking = (shipmentId: string) =>
+    apiFetch<ShipmentTracking>(`/api/tracking/shipment/${shipmentId}`);
+
+export const refreshShipmentTracking = (shipmentId: string) =>
+    apiFetch<{ success: boolean; status: string; new_checkpoints: number }>(
+        `/api/tracking/shipment/${shipmentId}/refresh`, { method: "POST" }
+    );
+
+export const getCarriers = () =>
+    apiFetch<{ id: string; code: string; name: string; tracking_url_template: string }[]>(`/api/tracking/carriers`);
+
+export const addTrackingCheckpoint = (shipmentId: string, data: { message: string; location: string; status?: string }) =>
+    apiFetch<{ success: boolean; checkpoint_id: string }>(
+        `/api/tracking/shipment/${shipmentId}/checkpoint`,
+        { method: "POST", body: JSON.stringify(data) }
+    );

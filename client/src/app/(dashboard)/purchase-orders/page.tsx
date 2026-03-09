@@ -16,7 +16,8 @@ import {
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Search, Loader2, Plus, Eye, X, Sparkles, Mail, FileText, CheckCircle, AlertTriangle, Copy, ChevronDown, Clock, Download, PackageCheck, Send, RefreshCw, Upload } from "lucide-react";
+import { Search, Loader2, Plus, Eye, X, Sparkles, Mail, FileText, CheckCircle, AlertTriangle, Copy, ChevronDown, Clock, Download, PackageCheck, Send, RefreshCw, Upload, MapPin } from "lucide-react";
+import TrackingPanel from "@/components/tracking/TrackingTimeline";
 import { toast } from "sonner";
 import { extractTextFromPDF } from "@/lib/pdf-extract";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -443,6 +444,11 @@ export default function PurchaseOrdersPage() {
                                         <PackageCheck className="h-3.5 w-3.5 mr-1" /> Receive Goods
                                     </TabsTrigger>
                                 )}
+                                {["approved", "sent", "partially_received", "received", "in_transit", "dispatched"].includes(viewOrder.status) && (
+                                    <TabsTrigger value="tracking" className="flex-1">
+                                        <MapPin className="h-3.5 w-3.5 mr-1" /> Tracking
+                                    </TabsTrigger>
+                                )}
                             </TabsList>
 
                             {/* Details Tab */}
@@ -575,8 +581,23 @@ export default function PurchaseOrdersPage() {
                                     </div>
                                 </div>
 
-                                {/* Send Button */}
-                                {(viewOrder.status === "sent" || viewOrder.status === "approved" || viewOrder.status === "received" || viewOrder.status === "partially_received") ? (
+                                {/* Send Button — status gate */}
+                                {viewOrder.status === "draft" ? (
+                                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm">
+                                        <p className="font-semibold text-amber-400">⏳ PO is still a Draft</p>
+                                        <p className="text-muted-foreground mt-1">Submit this PO for approval first. Go to the Details tab and click &quot;Submit for Approval&quot;.</p>
+                                    </div>
+                                ) : viewOrder.status === "pending_approval" ? (
+                                    <div className="rounded-lg border border-purple-500/30 bg-purple-500/10 p-4 text-sm">
+                                        <p className="font-semibold text-purple-400">🔒 Waiting for Admin Approval</p>
+                                        <p className="text-muted-foreground mt-1">This PO has been submitted and is awaiting Admin approval. Only after approval can it be sent to the supplier.</p>
+                                    </div>
+                                ) : viewOrder.status === "cancelled" ? (
+                                    <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm">
+                                        <p className="font-semibold text-red-400">❌ PO Cancelled</p>
+                                        <p className="text-muted-foreground mt-1">This purchase order has been cancelled and cannot be sent.</p>
+                                    </div>
+                                ) : (viewOrder.status === "sent" || viewOrder.status === "received" || viewOrder.status === "partially_received") ? (
                                     <div className="space-y-3">
                                         <div className="flex items-center gap-2 p-3 rounded-lg bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400 text-sm">
                                             <CheckCircle className="h-4 w-4" />
@@ -584,33 +605,35 @@ export default function PurchaseOrdersPage() {
                                                 Already sent{viewOrder.sent_at ? ` on ${new Date(viewOrder.sent_at).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : ""}
                                             </span>
                                         </div>
-                                        <Button
-                                            variant="outline"
-                                            className="w-full gap-2"
-                                            disabled={!viewOrder.supplier_email || submitting}
-                                            onClick={async () => {
-                                                setSubmitting(true);
-                                                try {
-                                                    const token = await getToken();
-                                                    if (!token) throw new Error("Not authenticated");
-                                                    const result = await sendPOToSupplier(viewOrder.id, token);
-                                                    toast.success(result.message || "PO resent to supplier");
-                                                    loadOrders();
-                                                } catch (err: any) {
-                                                    toast.error(err.message || "Failed to resend");
-                                                } finally {
-                                                    setSubmitting(false);
-                                                }
-                                            }}
-                                        >
-                                            {submitting ? (
-                                                <><Loader2 className="h-4 w-4 animate-spin" /> Resending...</>
-                                            ) : (
-                                                <><RefreshCw className="h-4 w-4" /> Resend to Supplier</>
-                                            )}
-                                        </Button>
+                                        {can("create_po") && (
+                                            <Button
+                                                variant="outline"
+                                                className="w-full gap-2"
+                                                disabled={!viewOrder.supplier_email || submitting}
+                                                onClick={async () => {
+                                                    setSubmitting(true);
+                                                    try {
+                                                        const token = await getToken();
+                                                        if (!token) throw new Error("Not authenticated");
+                                                        const result = await sendPOToSupplier(viewOrder.id, token);
+                                                        toast.success(result.message || "PO resent to supplier");
+                                                        loadOrders();
+                                                    } catch (err: any) {
+                                                        toast.error(err.message || "Failed to resend");
+                                                    } finally {
+                                                        setSubmitting(false);
+                                                    }
+                                                }}
+                                            >
+                                                {submitting ? (
+                                                    <><Loader2 className="h-4 w-4 animate-spin" /> Resending...</>
+                                                ) : (
+                                                    <><RefreshCw className="h-4 w-4" /> Resend to Supplier</>
+                                                )}
+                                            </Button>
+                                        )}
                                     </div>
-                                ) : (
+                                ) : viewOrder.status === "approved" && can("create_po") ? (
                                     <Button
                                         className="w-full bg-purple-600 hover:bg-purple-700 gap-2"
                                         disabled={!viewOrder.supplier_email || submitting}
@@ -636,6 +659,10 @@ export default function PurchaseOrdersPage() {
                                             <><Send className="h-4 w-4" /> Send PO to Supplier</>
                                         )}
                                     </Button>
+                                ) : (
+                                    <div className="rounded-lg border border-muted p-4 text-sm text-muted-foreground text-center">
+                                        You don&apos;t have permission to send POs, or this PO is not in an approved state.
+                                    </div>
                                 )}
                             </TabsContent>
 
@@ -913,6 +940,11 @@ export default function PurchaseOrdersPage() {
                                         <><PackageCheck className="h-4 w-4" /> Record Receipt</>
                                     )}
                                 </Button>
+                            </TabsContent>
+
+                            {/* Tracking Tab */}
+                            <TabsContent value="tracking" className="pt-4">
+                                <TrackingPanel poId={viewOrder.id} />
                             </TabsContent>
                         </Tabs>
                     )}

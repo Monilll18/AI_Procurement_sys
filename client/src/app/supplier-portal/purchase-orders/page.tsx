@@ -366,10 +366,14 @@ export default function SupplierPurchaseOrdersPage() {
                                                     min={0}
                                                     max={li.quantity}
                                                     value={partialItems[li.id] ?? li.quantity}
-                                                    onChange={(e) => setPartialItems((prev) => ({
-                                                        ...prev,
-                                                        [li.id]: parseInt(e.target.value) || 0,
-                                                    }))}
+                                                    onChange={(e) => {
+                                                        const val = parseInt(e.target.value) || 0;
+                                                        const clamped = Math.min(Math.max(val, 0), li.quantity);
+                                                        setPartialItems((prev) => ({
+                                                            ...prev,
+                                                            [li.id]: clamped,
+                                                        }));
+                                                    }}
                                                     className="w-24 text-center"
                                                 />
                                             </div>

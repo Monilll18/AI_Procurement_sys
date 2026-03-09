@@ -12,7 +12,7 @@ from app.routers import (
     products, suppliers, inventory, purchase_orders, approvals,
     analytics, insights, supplier_prices, notifications, audit_logs, budgets,
     users, settings, company_config, categories, departments, approval_rules,
-    requisitions, ai, supplier_auth, supplier_portal
+    requisitions, ai, supplier_auth, supplier_portal, tracking
 )
 
 load_dotenv()
@@ -61,6 +61,7 @@ app.include_router(requisitions.router, prefix="/api/requisitions", tags=["Requi
 app.include_router(ai.router, prefix="/api/ai", tags=["AI"])
 app.include_router(supplier_auth.router, prefix="/api/supplier-auth", tags=["Supplier Auth"])
 app.include_router(supplier_portal.router, prefix="/api/supplier-portal", tags=["Supplier Portal"])
+app.include_router(tracking.router)  # Already has /api/tracking prefix
 
 
 

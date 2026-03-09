@@ -89,9 +89,9 @@ export function AIChatWidget() {
             const res = await aiChat(question);
             const botMsg: Message = {
                 id: (Date.now() + 1).toString(),
-                role: "assistant",
-                content: res.answer,
-                intent: res.intent,
+                role: res.answer ? "assistant" : "system",
+                content: res.answer || "⚠️ AI service unavailable — please restart the backend server after updating the API key in `.env`.",
+                intent: res.answer ? res.intent : undefined,
                 timestamp: new Date(),
             };
             setMessages((prev) => [...prev, botMsg]);
