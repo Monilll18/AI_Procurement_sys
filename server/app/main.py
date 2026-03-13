@@ -30,10 +30,13 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS — Allow frontend access
-frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+frontend_urls_env = os.getenv("FRONTEND_URL", "http://localhost:3000")
+allowed_origins = [url.strip() for url in frontend_urls_env.split(",") if url.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_url],
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app", # Automatically allow any Vercel deployment
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
