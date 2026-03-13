@@ -13,3 +13,4 @@ export default async function SupplierActivatePage({ searchParams }: PageProps) 
 
     return <SupplierActivateContent token={token} isChangePassword={isChangePassword} />;
 }
+// build: Fri Mar 13 13:58:01 IST 2026
