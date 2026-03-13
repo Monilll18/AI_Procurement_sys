@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,14 @@ import { toast } from "sonner";
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function ResetPasswordPage() {
+    return (
+        <Suspense fallback={<div className="min-h-screen bg-gray-950 flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-violet-500" /></div>}>
+            <ResetPasswordContent />
+        </Suspense>
+    );
+}
+
+function ResetPasswordContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const tokenFromUrl = searchParams.get("token");
